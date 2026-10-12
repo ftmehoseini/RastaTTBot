@@ -1,0 +1,23 @@
+# systemd unit for the attendance bot.
+# Install:
+#   sudo cp deploy/rastattbot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rastattbot
+# Adjust User and the /opt/rastattbot paths if you cloned the repo elsewhere.
+
+[Unit]
+Description=RastaTT attendance bot (Soroush Plus)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rastattbot
+WorkingDirectory=/opt/rastattbot
+ExecStart=/opt/rastattbot/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

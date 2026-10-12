@@ -1,0 +1,2 @@
+# Daily database backup at 23:30 (server time). Install with: crontab -e
+30 23 * * * cd /opt/rastattbot && .venv/bin/python -m scripts.backup_db >> data/backup.log 2>&1
