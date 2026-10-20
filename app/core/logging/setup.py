@@ -63,6 +63,8 @@ def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
+        # Render exc_info into an "exception" field, so errors show their actual message.
+        structlog.processors.format_exc_info,
         _redact_secrets,
     ]
     renderer: Any = (

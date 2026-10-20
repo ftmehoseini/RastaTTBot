@@ -10,7 +10,7 @@ import asyncio
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import app.domain.models  # noqa: F401
@@ -135,6 +135,100 @@ async def import_legacy(path: str, source_tz: str, admin_ids: list[int], dry_run
     print("Run the bot's weekly report to recalculate summaries, or let them refresh on the next edit.")
 
 
+async def check_api(chat_id: int) -> int:
+    """Send one example of every message shape the bot uses and report which ones the platform rejects."""
+    from aiogram.types import (
+        BufferedInputFile,
+        InlineKeyboardButton,
+        InlineKeyboardMarkup,
+        KeyboardButton,
+        LinkPreviewOptions,
+        ReplyKeyboardMarkup,
+    )
+
+    from app.infrastructure.excel.menu_parser import build_menu_template
+    from app.infrastructure.integrations.messenger import create_bot
+
+    settings = get_settings()
+    bot = create_bot(settings)
+
+    def kb(rows: list[list[str]], width: int = 2) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=t, callback_data="noop") for t in row] for row in rows]
+        )
+
+    day_list = kb([["دوشنبه ۲۸ مهر", "یکشنبه ۲۷ مهر"]] * 4 + [["◀️ روزهای قبل", "روزهای بعد ▶️"], ["✖️ لغو"]])
+    month_grid = kb([["◀️", "مهر ۱۴۰۵", "▶️"], list("شیدسچپج")] + [[str(i) for i in range(1, 8)]] * 4)
+    blank_grid = kb([[" ", "۱", "۲"]])
+    hours = kb([[f"{h:02d}" for h in range(r, r + 6)] for r in range(0, 24, 6)])
+    menu = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="⏱ ورود و خروج"), KeyboardButton(text="📝 مرخصی")]])
+    menu_resize = ReplyKeyboardMarkup(keyboard=menu.keyboard, resize_keyboard=True)
+    menu_persistent = ReplyKeyboardMarkup(keyboard=menu.keyboard, resize_keyboard=True, is_persistent=True)
+
+    results: list[tuple[str, str]] = []
+    sent: dict[str, int] = {}
+
+    async def attempt(name: str, call) -> None:
+        try:
+            result = await call()
+            if hasattr(result, "message_id"):
+                sent[name] = result.message_id
+            results.append((name, "OK"))
+        except Exception as exc:
+            results.append((name, f"FAIL  {type(exc).__name__}: {exc}"))
+
+    try:
+        me = await bot.get_me()
+        print(f"platform: {settings.bot_platform.value} ({settings.api_base_url}) bot: @{me.username}")
+        await attempt("plain text", lambda: bot.send_message(chat_id, "تست ۱: متن ساده"))
+        await attempt(
+            "inline 2 buttons", lambda: bot.send_message(chat_id, "تست ۲", reply_markup=kb([["ورود", "خروج"]]))
+        )
+        await attempt("inline day list (new picker)", lambda: bot.send_message(chat_id, "تست ۳", reply_markup=day_list))
+        await attempt("inline hour grid 6x4", lambda: bot.send_message(chat_id, "تست ۴", reply_markup=hours))
+        await attempt(
+            "inline month grid 7 wide (old)", lambda: bot.send_message(chat_id, "تست ۵", reply_markup=month_grid)
+        )
+        await attempt(
+            "inline blank label (old bug)", lambda: bot.send_message(chat_id, "تست ۶", reply_markup=blank_grid)
+        )
+        if "inline 2 buttons" in sent:
+            await attempt(
+                "edit message text + buttons",
+                lambda: bot.edit_message_text(
+                    "تست ۲ (ویرایش‌شده)", chat_id=chat_id, message_id=sent["inline 2 buttons"], reply_markup=day_list
+                ),
+            )
+            await attempt(
+                "edit only buttons",
+                lambda: bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=sent["inline 2 buttons"], reply_markup=hours
+                ),
+            )
+        await attempt("reply keyboard (plain)", lambda: bot.send_message(chat_id, "تست ۷", reply_markup=menu))
+        await attempt("reply keyboard + resize", lambda: bot.send_message(chat_id, "تست ۸", reply_markup=menu_resize))
+        await attempt(
+            "reply keyboard + is_persistent", lambda: bot.send_message(chat_id, "تست ۹", reply_markup=menu_persistent)
+        )
+        await attempt(
+            "link_preview_options",
+            lambda: bot.send_message(chat_id, "تست ۱۰", link_preview_options=LinkPreviewOptions(is_disabled=True)),
+        )
+        await attempt("long text 3800 chars", lambda: bot.send_message(chat_id, "ا" * 3800))
+        await attempt(
+            "excel document",
+            lambda: bot.send_document(
+                chat_id, BufferedInputFile(build_menu_template(date.today()), filename="test.xlsx"), caption="تست ۱۱"
+            ),
+        )
+    finally:
+        await bot.session.close()
+    width = max(len(n) for n, _ in results)
+    for name, outcome in results:
+        print(f"{name.ljust(width)}  {outcome}")
+    return 0 if all(o == "OK" for _, o in results) else 1
+
+
 def check_config() -> None:
     settings, policy = get_settings(), get_policy()
     print(f"environment: {settings.app_env}")
@@ -166,6 +260,9 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("check-config", help="print the effective configuration (no secrets)")
 
+    p_api = sub.add_parser("check-api", help="send test messages and report which ones the platform rejects")
+    p_api.add_argument("--chat-id", type=int, default=0, help="your numeric user ID (default: first bootstrap admin)")
+
     args = parser.parse_args(argv)
     if args.command == "create-super-admin":
         asyncio.run(create_super_admin(args.user_id, args.name))
@@ -174,6 +271,11 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(import_legacy(args.path, args.source_timezone, ids, args.dry_run))
     elif args.command == "check-config":
         check_config()
+    elif args.command == "check-api":
+        chat_id = args.chat_id or next(iter(sorted(settings.super_admin_ids)), 0)
+        if not chat_id:
+            parser.error("pass --chat-id <your numeric ID>")
+        return asyncio.run(check_api(chat_id))
     return 0
 
 

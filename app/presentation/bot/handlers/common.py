@@ -8,10 +8,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.core.exceptions import ExpiredActionError
+from app.core.logging import get_logger
 from app.core.utils.jalali import JalaliDate
 from app.core.utils.text import normalize_digits
 from app.presentation.bot.callbacks.data import CalCb, TimeCb
 from app.presentation.bot.keyboards.pickers import day_page, minute_picker
+
+log = get_logger(__name__)
 
 router = Router(name="pickers")
 
@@ -36,9 +39,10 @@ async def show(query: CallbackQuery, text: str, markup: InlineKeyboardMarkup | N
         try:
             await message.edit_text(text, reply_markup=markup)
             return
-        except Exception as exc:  # old messages, documents, or identical content
+        except Exception as exc:  # old messages, documents, identical content, unsupported edits
             if "message is not modified" in str(exc):
                 return
+            log.warning("edit failed, sending a new message", error=str(exc))
         await message.answer(text, reply_markup=markup)
 
 

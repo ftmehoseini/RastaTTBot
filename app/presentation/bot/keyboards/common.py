@@ -42,5 +42,4 @@ def reply_menu(rows: list[list[str]]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=label) for label in row] for row in rows],
         resize_keyboard=True,
-        is_persistent=True,
     )

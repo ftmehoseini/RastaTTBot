@@ -35,7 +35,7 @@ def _from_user_id(update: Update) -> int | None:
 
 
 class UserLockMiddleware(BaseMiddleware):
-    """Processes one update at a time per user and drops message floods.
+    """Processes one update at a time per user and drops an identical message sent twice in a row.
 
     The bot runs as a single polling process, so an in-process lock is enough to stop a double
     tap from running two handlers concurrently for the same person.
@@ -44,7 +44,7 @@ class UserLockMiddleware(BaseMiddleware):
     def __init__(self, min_interval_seconds: float):
         self.min_interval = min_interval_seconds
         self.locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self.last_message: dict[int, float] = {}
+        self.last_message: dict[int, tuple[str, float]] = {}
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         assert isinstance(event, Update)
@@ -53,10 +53,12 @@ class UserLockMiddleware(BaseMiddleware):
             return await handler(event, data)
         if event.message is not None and self.min_interval:
             now = time.monotonic()
-            if now - self.last_message.get(user_id, 0.0) < self.min_interval:
-                log.info("throttled message", user=user_id)
+            text = event.message.text or ""
+            last_text, last_time = self.last_message.get(user_id, ("", 0.0))
+            if text == last_text and now - last_time < self.min_interval:
+                log.info("dropped duplicate message", user=user_id)
                 return None
-            self.last_message[user_id] = now
+            self.last_message[user_id] = (text, now)
         async with self.locks[user_id]:
             return await handler(event, data)
 
@@ -108,9 +110,12 @@ async def respond(update: Update, text: str) -> None:
     """Show an error to the user on whichever kind of update caused it."""
     if update.callback_query is not None:
         query: CallbackQuery = update.callback_query
-        # Bale and Soroush don't reliably display callback alerts, so the text is also sent as
-        # a normal message; the short toast is a bonus where the client supports it.
-        await query.answer(text[:ALERT_LIMIT])
+        # Bale and Soroush don't reliably display callback alerts, so the text is also sent as a
+        # normal message. A failed toast (e.g. "query is too old") must not block that message.
+        try:
+            await query.answer(text[:ALERT_LIMIT])
+        except Exception as exc:
+            log.info("callback answer failed", error=str(exc))
         if query.message is not None:
             await query.message.answer(text)
         return
@@ -132,7 +137,7 @@ class ErrorMiddleware(BaseMiddleware):
                 if event.callback_query is not None:
                     await event.callback_query.answer()
                 return None
-            log.exception("telegram bad request")
+            log.exception("telegram bad request", error=str(exc))
             await self._safe_respond(event, GENERIC_ERROR)
         except Exception:
             log.exception("unhandled error")

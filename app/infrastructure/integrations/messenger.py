@@ -30,12 +30,9 @@ MAX_CAPTION_LENGTH = 900
 def create_bot(settings: Settings) -> Bot:
     """Create a Bot that talks to the configured platform's API server."""
     session = AiohttpSession(api=TelegramAPIServer.from_base(settings.api_base_url))
-    # No parse_mode: plain text renders identically on Telegram, Bale and Soroush.
-    return Bot(
-        token=settings.bot_token.get_secret_value(),
-        session=session,
-        default=DefaultBotProperties(parse_mode=None, link_preview_is_disabled=True),
-    )
+    # No parse_mode and no link-preview options: Bale and Soroush implement an older subset of the
+    # Telegram API and reject unknown fields with a generic 400 (INVALID INPUT).
+    return Bot(token=settings.bot_token.get_secret_value(), session=session, default=DefaultBotProperties())
 
 
 def to_markup(buttons: InlineButtons | None) -> InlineKeyboardMarkup | None:
