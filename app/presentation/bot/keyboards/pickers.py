@@ -15,6 +15,8 @@ from app.presentation.bot.callbacks.data import CalCb, TimeCb
 from app.presentation.bot.keyboards.common import button, cancel_row, chunk, inline, noop
 
 WEEK_HEADER = ["ش", "ی", "د", "س", "چ", "پ", "ج"]
+# Placeholder for empty calendar cells: platforms reject buttons whose text is blank.
+BLANK = "·"
 MINUTES = (0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)
 
 
@@ -32,9 +34,9 @@ def calendar(purpose: str, year: int, month: int, min_date: date, max_date: date
     has_next = (next_y, next_m) <= (max_j.year, max_j.month)
     rows.append(
         [
-            button("◀️", CalCb(p=purpose, a="m", v=prev_y * 100 + prev_m).pack()) if has_prev else noop(" "),
+            button("◀️", CalCb(p=purpose, a="m", v=prev_y * 100 + prev_m).pack()) if has_prev else noop(BLANK),
             noop(month_label(year, month)),
-            button("▶️", CalCb(p=purpose, a="m", v=next_y * 100 + next_m).pack()) if has_next else noop(" "),
+            button("▶️", CalCb(p=purpose, a="m", v=next_y * 100 + next_m).pack()) if has_next else noop(BLANK),
         ]
     )
     rows.append([noop(d) for d in WEEK_HEADER])
@@ -42,7 +44,7 @@ def calendar(purpose: str, year: int, month: int, min_date: date, max_date: date
     first = to_gregorian(year, month, 1)
     # Column 0 is Saturday (Python weekday 5).
     lead = (first.weekday() - 5) % 7
-    cells = [noop(" ") for _ in range(lead)]
+    cells = [noop(BLANK) for _ in range(lead)]
     for day in range(1, days_in_month(year, month) + 1):
         g = first + timedelta(days=day - 1)
         label = to_persian_digits(day)
@@ -51,7 +53,7 @@ def calendar(purpose: str, year: int, month: int, min_date: date, max_date: date
         else:
             cells.append(noop("·"))
     while len(cells) % 7:
-        cells.append(noop(" "))
+        cells.append(noop(BLANK))
     rows.extend(chunk(cells, 7))
     rows.append(cancel_row())
     return inline(rows)

@@ -108,10 +108,9 @@ async def respond(update: Update, text: str) -> None:
     """Show an error to the user on whichever kind of update caused it."""
     if update.callback_query is not None:
         query: CallbackQuery = update.callback_query
-        if len(text) <= ALERT_LIMIT:
-            await query.answer(text, show_alert=True)
-            return
-        await query.answer()
+        # Bale and Soroush don't reliably display callback alerts, so the text is also sent as
+        # a normal message; the short toast is a bonus where the client supports it.
+        await query.answer(text[:ALERT_LIMIT])
         if query.message is not None:
             await query.message.answer(text)
         return

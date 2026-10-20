@@ -1,0 +1,23 @@
+# Live-code override for editing on the server (e.g. with VS Code Remote-SSH).
+# Mounts the source into the containers, so a restart picks up changes without rebuilding:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   docker compose restart bot          # after editing app/ (worker too if you changed tasks)
+# Use a normal `docker compose up -d --build` (without this file) for production.
+services:
+  bot:
+    volumes:
+      - ./app:/app/app:ro
+      - ./config:/app/config:ro
+      - appdata:/app/data
+    environment:
+      LOG_FORMAT: console
+  worker:
+    volumes:
+      - ./app:/app/app:ro
+      - ./config:/app/config:ro
+      - appdata:/app/data
+  beat:
+    volumes:
+      - ./app:/app/app:ro
+      - ./config:/app/config:ro
+      - appdata:/app/data

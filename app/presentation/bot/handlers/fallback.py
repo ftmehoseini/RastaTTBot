@@ -13,11 +13,15 @@ router = Router(name="fallback")
 @router.callback_query()
 async def stale_callback(query: CallbackQuery, user: User | None) -> None:
     if user is None:
-        await query.answer("ابتدا با /start ثبت‌نام کنید.", show_alert=True)
+        text = "ابتدا با /start ثبت‌نام کنید."
     elif not user.is_active:
-        await query.answer("حساب شما فعال نیست.", show_alert=True)
+        text = "حساب شما فعال نیست."
     else:
-        await query.answer("این دکمه منقضی شده است. لطفاً دوباره از منو شروع کنید.", show_alert=True)
+        text = "این دکمه منقضی شده است. لطفاً دوباره از منو شروع کنید."
+    # Alerts are not shown by every platform (Bale/Soroush), so also send a message.
+    await query.answer(text)
+    if isinstance(query.message, Message):
+        await query.message.answer(text)
 
 
 @router.message()

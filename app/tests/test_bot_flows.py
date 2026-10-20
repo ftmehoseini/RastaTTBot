@@ -32,9 +32,14 @@ class RecordingSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[TelegramMethod[Any]] = []
+        self.blank_labels: list[str] = []
 
     async def make_request(self, bot: Bot, method: TelegramMethod[Any], timeout: int | None = None) -> Any:  # noqa: ASYNC109
         self.calls.append(method)
+        # Telegram, Bale and Soroush reject blank button labels. The bot's error middleware would
+        # swallow an exception here, so violations are collected and checked after each test.
+        for row in getattr(getattr(method, "reply_markup", None), "inline_keyboard", None) or []:
+            self.blank_labels.extend(type(method).__name__ for b in row if not b.text.strip())
         if isinstance(method, (SendMessage, SendDocument)):
             return Message(
                 message_id=next(_ids),
@@ -128,8 +133,10 @@ class Harness:
 
 
 @pytest.fixture
-def bot(session_factory, policy, clock) -> Harness:
-    return Harness(session_factory, policy, clock)
+def bot(session_factory, policy, clock):
+    harness = Harness(session_factory, policy, clock)
+    yield harness
+    assert not harness.recorder.blank_labels, f"blank inline button labels sent: {harness.recorder.blank_labels}"
 
 
 EMP, SEC, MGR = 5001, 5002, 5003
