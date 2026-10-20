@@ -21,6 +21,14 @@ PLATFORM_API_BASES: dict[BotPlatform, str] = {
 }
 
 
+# Soroush answers INVALID_INPUT for rows wider than 2 (measured with `python -m app.cli check-api`).
+PLATFORM_MAX_BUTTONS_PER_ROW: dict[BotPlatform, int] = {
+    BotPlatform.TELEGRAM: 8,
+    BotPlatform.BALE: 8,
+    BotPlatform.SOROUSH: 2,
+}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -32,6 +40,8 @@ class Settings(BaseSettings):
     bot_platform: BotPlatform = BotPlatform.TELEGRAM
     bot_api_base_url: str = ""
     bootstrap_super_admin_ids: str = ""
+    # Inline buttons per keyboard row. 0 = platform default (Soroush rejects wide rows).
+    bot_max_buttons_per_row: int = Field(default=0, ge=0, le=8)
 
     database_url: str = "postgresql+asyncpg://rasta_bot:change-me@localhost:5432/rasta_bot"
     database_echo: bool = False
@@ -57,6 +67,10 @@ class Settings(BaseSettings):
     @property
     def api_base_url(self) -> str:
         return self.bot_api_base_url or PLATFORM_API_BASES[self.bot_platform]
+
+    @property
+    def max_buttons_per_row(self) -> int:
+        return self.bot_max_buttons_per_row or PLATFORM_MAX_BUTTONS_PER_ROW[self.bot_platform]
 
     @property
     def super_admin_ids(self) -> frozenset[int]:

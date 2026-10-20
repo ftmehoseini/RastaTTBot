@@ -33,6 +33,7 @@ class RecordingSession(BaseSession):
         super().__init__()
         self.calls: list[TelegramMethod[Any]] = []
         self.blank_labels: list[str] = []
+        self.widest_row = 0
 
     async def make_request(self, bot: Bot, method: TelegramMethod[Any], timeout: int | None = None) -> Any:  # noqa: ASYNC109
         self.calls.append(method)
@@ -40,6 +41,7 @@ class RecordingSession(BaseSession):
         # swallow an exception here, so violations are collected and checked after each test.
         for row in getattr(getattr(method, "reply_markup", None), "inline_keyboard", None) or []:
             self.blank_labels.extend(type(method).__name__ for b in row if not b.text.strip())
+            self.widest_row = max(self.widest_row, len(row))
         if isinstance(method, (SendMessage, SendDocument)):
             return Message(
                 message_id=next(_ids),
@@ -333,3 +335,25 @@ async def test_admin_attendance_report_and_role_management(bot: Harness, clock) 
     assert "اضافه شد" in bot.last_text(EMP)
     await bot.text(SEC, f"/user {EMP}")
     assert "ادمین ۲" in bot.last_text(SEC)
+
+
+async def test_soroush_row_limit_applies_to_every_keyboard(bot: Harness, clock) -> None:
+    from app.infrastructure.integrations.messenger import set_max_buttons_per_row
+
+    set_max_buttons_per_row(2)  # what create_bot() sets for BOT_PLATFORM=soroush
+    try:
+        await bot.register(EMP, "مریم کریمی")
+        clock.set(tehran(2026, 10, 19, 12, 0))
+        await bot.press(EMP, AttCb(a="forgot").pack())
+        await bot.press(EMP, "cor:kind:in")
+        await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 18).toordinal()).pack())
+        await bot.press(EMP, "tm:corr_in:h:8:0")  # minute picker
+        await bot.press(EMP, "tm:corr_in:m:8:15")
+        await bot.press(EMP, LeaveCb(a="new").pack())
+        await bot.press(EMP, LeaveCb(a="pay", v="PAID").pack())
+        await bot.press(EMP, LeaveCb(a="unit", v="HOURLY").pack())
+        await bot.press(EMP, CalCb(p="lv_d", a="d", v=date(2026, 10, 20).toordinal()).pack())  # hour picker
+        assert "tm:lv_s:h:10:0" in bot.buttons(EMP)
+        assert bot.recorder.widest_row == 2
+    finally:
+        set_max_buttons_per_row(8)

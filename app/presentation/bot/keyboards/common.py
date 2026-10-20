@@ -2,6 +2,7 @@
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from app.infrastructure.integrations.messenger import reflow
 from app.presentation.bot.callbacks.data import NOOP, NavCb
 
 BTN_HELP = "ℹ️ راهنما"
@@ -15,7 +16,8 @@ def button(text: str, data: str) -> InlineKeyboardButton:
 
 
 def inline(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    # Wide rows (hour/minute pickers) are split to the platform's limit, e.g. 2 on Soroush.
+    return InlineKeyboardMarkup(inline_keyboard=reflow(rows))
 
 
 def back_row(to: str = "main") -> list[InlineKeyboardButton]:

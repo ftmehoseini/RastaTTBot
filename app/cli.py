@@ -159,7 +159,7 @@ async def check_api(chat_id: int) -> int:
 
     day_list = kb([["دوشنبه ۲۸ مهر", "یکشنبه ۲۷ مهر"]] * 4 + [["◀️ روزهای قبل", "روزهای بعد ▶️"], ["✖️ لغو"]])
     month_grid = kb([["◀️", "مهر ۱۴۰۵", "▶️"], list("شیدسچپج")] + [[str(i) for i in range(1, 8)]] * 4)
-    blank_grid = kb([[" ", "۱", "۲"]])
+    blank_grid = kb([[" ", "۱"]])
     hours = kb([[f"{h:02d}" for h in range(r, r + 6)] for r in range(0, 24, 6)])
     menu = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="⏱ ورود و خروج"), KeyboardButton(text="📝 مرخصی")]])
     menu_resize = ReplyKeyboardMarkup(keyboard=menu.keyboard, resize_keyboard=True)
@@ -180,11 +180,18 @@ async def check_api(chat_id: int) -> int:
     try:
         me = await bot.get_me()
         print(f"platform: {settings.bot_platform.value} ({settings.api_base_url}) bot: @{me.username}")
+        print(f"bot uses at most {settings.max_buttons_per_row} buttons per row (BOT_MAX_BUTTONS_PER_ROW)")
         await attempt("plain text", lambda: bot.send_message(chat_id, "تست ۱: متن ساده"))
         await attempt(
             "inline 2 buttons", lambda: bot.send_message(chat_id, "تست ۲", reply_markup=kb([["ورود", "خروج"]]))
         )
         await attempt("inline day list (new picker)", lambda: bot.send_message(chat_id, "تست ۳", reply_markup=day_list))
+        for width in (3, 4, 5):
+            row = [str(n) for n in range(1, width + 1)]
+            await attempt(
+                f"inline {width} per row",
+                lambda w=width, r=row: bot.send_message(chat_id, f"تست عرض {w}", reply_markup=kb([r, r])),
+            )
         await attempt("inline hour grid 6x4", lambda: bot.send_message(chat_id, "تست ۴", reply_markup=hours))
         await attempt(
             "inline month grid 7 wide (old)", lambda: bot.send_message(chat_id, "تست ۵", reply_markup=month_grid)

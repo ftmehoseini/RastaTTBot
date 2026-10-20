@@ -27,8 +27,27 @@ MAX_MESSAGE_LENGTH = 3800
 MAX_CAPTION_LENGTH = 900
 
 
+# Set from settings by create_bot(); every inline keyboard is reflowed to this width.
+_max_buttons_per_row = 8
+
+
+def set_max_buttons_per_row(limit: int) -> None:
+    global _max_buttons_per_row
+    _max_buttons_per_row = max(1, limit)
+
+
+def reflow(rows: list[list[InlineKeyboardButton]]) -> list[list[InlineKeyboardButton]]:
+    """Split rows wider than the platform allows, keeping button order."""
+    limit = _max_buttons_per_row
+    out: list[list[InlineKeyboardButton]] = []
+    for row in rows:
+        out.extend(row[i : i + limit] for i in range(0, len(row), limit))
+    return out
+
+
 def create_bot(settings: Settings) -> Bot:
     """Create a Bot that talks to the configured platform's API server."""
+    set_max_buttons_per_row(settings.max_buttons_per_row)
     session = AiohttpSession(api=TelegramAPIServer.from_base(settings.api_base_url))
     # No parse_mode and no link-preview options: Bale and Soroush implement an older subset of the
     # Telegram API and reject unknown fields with a generic 400 (INVALID INPUT).
@@ -38,11 +57,8 @@ def create_bot(settings: Settings) -> Bot:
 def to_markup(buttons: InlineButtons | None) -> InlineKeyboardMarkup | None:
     if not buttons or not buttons.rows:
         return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=b.text, callback_data=b.callback_data) for b in row] for row in buttons.rows
-        ]
-    )
+    rows = [[InlineKeyboardButton(text=b.text, callback_data=b.callback_data) for b in row] for row in buttons.rows]
+    return InlineKeyboardMarkup(inline_keyboard=reflow(rows))
 
 
 def split_text(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
