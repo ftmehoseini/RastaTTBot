@@ -1,0 +1,78 @@
+# Organization policy. Non-secret business rules only; secrets live in .env.
+# Every option is documented in docs/CONFIGURATION.md.
+# Override per environment with config/<APP_ENV>.yaml or POLICY_FILE.
+
+organization:
+  name: "RastaTT"
+  timezone: Asia/Tehran
+  locale: fa_IR
+  # Jalali dates (YYYY/MM/DD) treated as non-workdays
+  holidays: []
+
+users:
+  require_admin_activation: false
+  min_full_name_length: 3
+  max_full_name_length: 80
+
+attendance:
+  # Workdays by English short name (sat sun mon tue wed thu fri)
+  workdays: [sat, sun, mon, tue, wed, thu]
+  standard_workday_minutes: 480
+  standard_start_time: "09:00"
+  standard_end_time: "17:00"
+  check_in_reminder_time: "10:00"
+  check_out_reminder_time: "20:00"
+  # Reminders still go out if the scheduler was down at the exact time, within this window
+  reminder_catchup_minutes: 180
+  allowed_late_arrival_minutes: 0
+  allowed_early_departure_minutes: 0
+  overtime_rounding_minutes: 15
+  # Name of the calculation strategy, see docs/CONFIGURATION.md
+  calculation_policy: standard_deduction
+  max_shift_hours: 16
+  allow_checkout_without_checkin: false
+  # How long a live check-in/out confirmation button stays valid
+  live_confirmation_ttl_seconds: 300
+  allow_same_day_manual_correction: true
+  allow_future_manual_correction: false
+  max_manual_correction_age_days: 30
+  manual_correction_requires_approval: false
+
+leave:
+  require_rejection_reason: true
+  allow_overlapping_leave_requests: false
+  max_past_days: 7
+  max_future_days: 90
+  max_daily_leave_days: 30
+  count_non_workdays_in_daily_leave: true
+  min_rejection_reason_length: 3
+  max_reason_length: 500
+
+food:
+  ordering_deadline_time: "10:00"
+  # Leave empty to use ordering_deadline_time for guest orders too
+  guest_ordering_deadline_time: ""
+  currency_label: "تومان"
+  allow_guest_orders: true
+  max_guest_count_per_order: 10
+  max_items_per_employee_order: 1
+  allow_order_edit_before_deadline: true
+  max_price_toman: 100000000
+  retain_menu_files: false
+
+payment:
+  shaba_number: ""
+  account_holder_name: ""
+  payment_message: ""
+
+notifications:
+  batch_size: 20
+  batch_interval_seconds: 1.5
+  max_send_retries: 3
+
+reports:
+  retention_hours: 24
+
+rate_limit:
+  # Minimum seconds between two updates from the same user before they are dropped
+  min_interval_seconds: 0.4

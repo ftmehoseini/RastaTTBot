@@ -1,0 +1,46 @@
+[project]
+name = "rasta-admin-bot"
+version = "1.0.0"
+description = "Administrative automation bot: attendance, leave and food ordering"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.15,<4",
+    "SQLAlchemy[asyncio]>=2.0.30,<2.2",
+    "asyncpg>=0.29,<1",
+    "alembic>=1.13,<2",
+    "redis>=5.0,<7",
+    "celery[redis]>=5.4,<6",
+    "openpyxl>=3.1,<4",
+    "jdatetime>=5.0,<7",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3,<3",
+    "PyYAML>=6.0,<7",
+    "structlog>=24.1",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "pytest-asyncio>=0.23",
+    "aiosqlite>=0.20",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning:jdatetime.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003", "B008", "E501"]
+
+[tool.ruff.format]
+quote-style = "double"

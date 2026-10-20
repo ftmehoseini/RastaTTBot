@@ -1,0 +1,53 @@
+import uuid
+from datetime import datetime
+
+import sqlalchemy as sa
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column, utc_timestamp
+from app.core.security.rbac import RoleCode
+
+
+class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "users"
+
+    # The messenger's numeric user ID (Telegram/Bale/Soroush). Private chat ID equals it.
+    messenger_user_id: Mapped[int] = mapped_column(sa.BigInteger, unique=True, index=True)
+    chat_id: Mapped[int] = mapped_column(sa.BigInteger)
+    full_name: Mapped[str] = mapped_column(sa.String(120))
+    username: Mapped[str | None] = mapped_column(sa.String(64))
+    is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=sa.true())
+    registered_at: Mapped[datetime | None] = mapped_column(utc_timestamp())
+    # Optional per-user work schedule name; null means the organization default.
+    schedule_code: Mapped[str | None] = mapped_column(sa.String(40))
+
+    role_links: Mapped[list["UserRole"]] = relationship(
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        foreign_keys="UserRole.user_id",
+    )
+
+    @property
+    def roles(self) -> set[RoleCode]:
+        return {link.role.code for link in self.role_links}
+
+
+class Role(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "roles"
+
+    code: Mapped[RoleCode] = mapped_column(enum_column(RoleCode), unique=True)
+    title: Mapped[str] = mapped_column(sa.String(80))
+
+
+class UserRole(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "user_roles"
+    __table_args__ = (sa.UniqueConstraint("user_id", "role_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, sa.ForeignKey("users.id", ondelete="CASCADE"))
+    role_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, sa.ForeignKey("roles.id", ondelete="CASCADE"))
+    assigned_by: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, sa.ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(utc_timestamp(), server_default=sa.func.now())
+
+    user: Mapped[User] = relationship(back_populates="role_links", foreign_keys=[user_id])
+    role: Mapped[Role] = relationship(lazy="joined")
