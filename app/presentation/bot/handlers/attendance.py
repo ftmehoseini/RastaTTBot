@@ -18,14 +18,16 @@ from app.infrastructure.excel.reports import build_attendance_workbook, report_f
 from app.presentation.bot.callbacks.data import OPEN_ATTENDANCE, AttCb, CalCb, CorrCb, NavCb, TimeCb
 from app.presentation.bot.handlers.common import (
     parse_hhmm,
+    parse_typed_date,
     picker_range,
     query_message,
+    reply,
     send_file,
     show,
     start_picker,
 )
 from app.presentation.bot.keyboards.common import back_row, button, cancel_row, confirm_rows, inline
-from app.presentation.bot.keyboards.pickers import calendar_for, hour_picker
+from app.presentation.bot.keyboards.pickers import TYPE_DATE_HINT, calendar_for, hour_picker
 from app.presentation.bot.middlewares.filters import IsRegistered
 from app.presentation.bot.modules import BTN_ATTENDANCE
 from app.presentation.bot.states.flows import Correction
@@ -148,11 +150,7 @@ async def correction_start(query: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     markup = inline(
         [
-            [
-                button("ورود", CorrCb(a="kind", k="in").pack()),
-                button("خروج", CorrCb(a="kind", k="out").pack()),
-                button("هر دو", CorrCb(a="kind", k="both").pack()),
-            ],
+            [button("ورود", CorrCb(a="kind", k="in").pack()), button("خروج", CorrCb(a="kind", k="out").pack())],
             cancel_row(),
         ]
     )
@@ -169,28 +167,43 @@ async def correction_kind(query: CallbackQuery, callback_data: CorrCb, state: FS
     await start_picker(state, min_date, max_date)
     await show(
         query,
-        "📅 تاریخ روزی را که ثبت نشده انتخاب کنید:",
+        f"📅 تاریخ روزی را که ثبت نشده انتخاب کنید.\n{TYPE_DATE_HINT}",
         calendar_for("corr", services.time.today(), min_date, max_date),
     )
 
 
 @router.callback_query(StateFilter(Correction.choosing_date), CalCb.filter((F.p == "corr") & (F.a == "d")))
 async def correction_date(query: CallbackQuery, callback_data: CalCb, state: FSMContext) -> None:
+    await _date_chosen(query, state, date.fromordinal(callback_data.v))
+
+
+@router.message(StateFilter(Correction.choosing_date), F.text)
+async def correction_date_typed(message: Message, state: FSMContext) -> None:
+    day = parse_typed_date(message.text or "")
+    if day is None:
+        await message.answer("تاریخ را به شکل ۱۴۰۵/۰۷/۲۶ بنویسید یا از دکمه‌ها انتخاب کنید.")
+        return
+    await _date_chosen(message, state, day)
+
+
+async def _date_chosen(target: CallbackQuery | Message, state: FSMContext, day: date) -> None:
     min_date, max_date = await picker_range(state)
-    day = date.fromordinal(callback_data.v)
     if not min_date <= day <= max_date:
-        raise ExpiredActionError()
+        await reply(
+            target,
+            f"این تاریخ قابل انتخاب نیست. فقط از {format_date(min_date)} تا {format_date(max_date)} مجاز است.",
+        )
+        return
     data = await state.get_data()
-    await state.update_data(day=callback_data.v)
+    await state.update_data(day=day.toordinal())
     await state.set_state(Correction.choosing_time)
-    step = "out" if data["kind"] == "out" else "in"
-    await _ask_time(query, step, day)
+    await _ask_time(target, "out" if data["kind"] == "out" else "in", day)
 
 
-async def _ask_time(query: CallbackQuery, step: str, day: date) -> None:
+async def _ask_time(target: CallbackQuery | Message, step: str, day: date) -> None:
     label = "ورود" if step == "in" else "خروج"
-    await show(
-        query,
+    await reply(
+        target,
         f"🕘 ساعت {label} روز {format_date(day)} را انتخاب کنید.\nیا ساعت دقیق را به شکل ۰۸:۴۵ بنویسید.",
         hour_picker(f"corr_{step}"),
     )
@@ -198,8 +211,7 @@ async def _ask_time(query: CallbackQuery, step: str, day: date) -> None:
 
 @router.callback_query(StateFilter(Correction.choosing_time), TimeCb.filter((F.a == "m") & F.p.startswith("corr_")))
 async def correction_time_button(query: CallbackQuery, callback_data: TimeCb, state: FSMContext) -> None:
-    step = callback_data.p.removeprefix("corr_")
-    await _time_chosen(state, step, time(callback_data.h, callback_data.m), query=query)
+    await _time_chosen(query, state, callback_data.p.removeprefix("corr_"), time(callback_data.h, callback_data.m))
 
 
 @router.message(StateFilter(Correction.choosing_time), F.text)
@@ -210,31 +222,19 @@ async def correction_time_typed(message: Message, state: FSMContext) -> None:
         return
     data = await state.get_data()
     step = "out" if data["kind"] == "out" or "in_time" in data else "in"
-    await _time_chosen(state, step, value, message=message)
+    await _time_chosen(message, state, step, value)
 
 
-async def _time_chosen(
-    state: FSMContext, step: str, value: time, *, query: CallbackQuery | None = None, message: Message | None = None
-) -> None:
+async def _time_chosen(target: CallbackQuery | Message, state: FSMContext, step: str, value: time) -> None:
     await state.update_data({f"{step}_time": value.strftime("%H:%M")})
     data = await state.get_data()
     day = date.fromordinal(data["day"])
     if data["kind"] == "both" and step == "in":
-        if query is not None:
-            await _ask_time(query, "out", day)
-        elif message is not None:
-            await message.answer(
-                f"🕘 حالا ساعت خروج روز {format_date(day)} را انتخاب کنید یا بنویسید:",
-                reply_markup=hour_picker("corr_out"),
-            )
+        await _ask_time(target, "out", day)
         return
     await state.set_state(Correction.confirming)
     text = texts.correction_review(KIND_BY_CODE[data["kind"]], day, data.get("in_time"), data.get("out_time"))
-    markup = inline(confirm_rows(CorrCb(a="ok").pack()))
-    if query is not None:
-        await show(query, text, markup)
-    elif message is not None:
-        await message.answer(text, reply_markup=markup)
+    await reply(target, text, inline(confirm_rows(CorrCb(a="ok").pack())))
 
 
 @router.callback_query(StateFilter(Correction.confirming), CorrCb.filter(F.a == "ok"))

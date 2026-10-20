@@ -20,7 +20,7 @@ Sub-menu: ثبت ورود · ثبت خروج · ثبت فراموشی ورود/�
 
 **Check-out.** Show the time → confirm → save → reply with today's worked time and net balance. Without a check-in it points to the forgotten-entry flow. A shift that crossed midnight is closed on the previous day's record. A duplicate shows the registered time.
 
-**Forgotten entry.** Choose ورود / خروج / هر دو → Jalali calendar (month view with ◀️ ▶️; days outside the allowed window are greyed) → hour buttons → minute buttons, or type `08:45` (Persian digits work) → for "both", the check-out time → review → confirm. Validation: not in the future, not older than `max_manual_correction_age_days`, check-out after check-in and within the maximum shift, no overlap with neighbouring days, no overwriting. The only exception: an existing check-in may be moved **earlier** to fix a late button press. Saved with source `MANUAL_CORRECTION` and an immutable `attendance_manual_corrections` row (claimed and previous values, submitter, time). If `manual_correction_requires_approval` is on, the correction is stored as `PENDING_APPROVAL` and not applied.
+**Forgotten entry.** Choose ورود or خروج → pick the day from a list of dates (8 per page, «روزهای قبل / بعد» to page), or type it as `1405/07/26` → hour buttons → minute buttons, or type `08:45` (Persian digits work) → review → confirm. A day where both were forgotten is entered as two corrections: first ورود, then خروج. Validation: not in the future, not older than `max_manual_correction_age_days`, check-out after check-in and within the maximum shift, no overlap with neighbouring days, no overwriting. The only exception: an existing check-in may be moved **earlier** to fix a late button press. Saved with source `MANUAL_CORRECTION` and an immutable `attendance_manual_corrections` row (claimed and previous values, submitter, time). If `manual_correction_requires_approval` is on, the correction is stored as `PENDING_APPROVAL` and not applied.
 
 **Weekly report.** Current Jalali week (Saturday–Friday): each day's in/out, worked time, lateness, early departure, overtime, deficit, net, missing registrations (⚠️), manual entries (✍️), and weekly totals. An "Excel" button sends the same data as a file.
 
@@ -33,7 +33,8 @@ Sub-menu: درخواست مرخصی جدید · درخواست‌های من · 
 ```
 New: پرداخت (با حقوق / بی‌حقوق) → نوع (ساعتی / روزانه)
   ساعتی:  date → start time → end time → reason (optional) → review → submit
-  روزانه: start date → end date (calendar starts at the start date) → reason → review (shows days) → submit
+  روزانه: start date → end date (list starts at the start date) → reason → review (shows days) → submit
+  Dates: tap a day in the list or type 1405/07/26; times: hour → minute buttons or type 10:30
 ```
 
 Validation: start ≤ end; hourly leave is within one day and end > start; dates within `max_past_days`..`max_future_days`; at most `max_daily_leave_days`; no overlap with pending/approved requests unless `allow_overlapping_leave_requests`.

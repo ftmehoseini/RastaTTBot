@@ -19,9 +19,9 @@ from app.domain.leave.models import OPEN_LEAVE_STATUSES, LeavePayType, LeaveRequ
 from app.domain.notifications.models import NotificationType
 from app.domain.users.models import User
 from app.presentation.bot.callbacks.data import ApprovalCb, CalCb, LeaveCb, NavCb, TimeCb
-from app.presentation.bot.handlers.common import parse_hhmm, picker_range, show, start_picker
+from app.presentation.bot.handlers.common import parse_hhmm, parse_typed_date, picker_range, reply, show, start_picker
 from app.presentation.bot.keyboards.common import back_row, button, cancel_row, confirm_rows, inline
-from app.presentation.bot.keyboards.pickers import calendar_for, hour_picker
+from app.presentation.bot.keyboards.pickers import TYPE_DATE_HINT, calendar_for, hour_picker
 from app.presentation.bot.middlewares.filters import IsRegistered
 from app.presentation.bot.modules import BTN_LEAVE
 from app.presentation.bot.states.flows import LeaveFlow
@@ -124,37 +124,43 @@ async def choose_pay(query: CallbackQuery, callback_data: LeaveCb, state: FSMCon
 async def choose_unit(query: CallbackQuery, callback_data: LeaveCb, state: FSMContext, services: Services) -> None:
     unit = LeaveUnit(callback_data.v)
     min_date, max_date = services.leave.date_window()
-    await state.update_data(unit=unit.value, awaiting=None)
-    await start_picker(state, min_date, max_date)
     purpose = "lv_d" if unit == LeaveUnit.HOURLY else "lv_s"
-    prompt = "📅 تاریخ مرخصی را انتخاب کنید:" if unit == LeaveUnit.HOURLY else "📅 تاریخ شروع مرخصی را انتخاب کنید:"
-    await show(query, prompt, calendar_for(purpose, services.time.today(), min_date, max_date))
+    await state.update_data(unit=unit.value, awaiting=purpose)
+    await start_picker(state, min_date, max_date)
+    prompt = "📅 تاریخ مرخصی را انتخاب کنید." if unit == LeaveUnit.HOURLY else "📅 تاریخ شروع مرخصی را انتخاب کنید."
+    await show(query, f"{prompt}\n{TYPE_DATE_HINT}", calendar_for(purpose, services.time.today(), min_date, max_date))
 
 
 @router.callback_query(StateFilter(LeaveFlow.choosing), CalCb.filter((F.a == "d") & F.p.in_({"lv_d", "lv_s", "lv_e"})))
 async def choose_date(query: CallbackQuery, callback_data: CalCb, state: FSMContext) -> None:
+    await _date_chosen(query, state, callback_data.p, date.fromordinal(callback_data.v))
+
+
+async def _date_chosen(target: CallbackQuery | Message, state: FSMContext, purpose: str, day: date) -> None:
     min_date, max_date = await picker_range(state)
-    day = date.fromordinal(callback_data.v)
     if not min_date <= day <= max_date:
-        raise ExpiredActionError()
-    if callback_data.p == "lv_d":
+        await reply(
+            target, f"این تاریخ قابل انتخاب نیست. بازه‌ی مجاز: {format_date(min_date)} تا {format_date(max_date)}"
+        )
+        return
+    if purpose == "lv_d":
         await state.update_data(start=day.toordinal(), end=day.toordinal(), awaiting="start_time")
-        await show(
-            query,
+        await reply(
+            target,
             f"🕘 ساعت شروع مرخصی ({format_date(day)}) را انتخاب کنید یا بنویسید (مثل ۱۰:۳۰):",
             hour_picker("lv_s", 6, 22),
         )
-    elif callback_data.p == "lv_s":
-        await state.update_data(start=day.toordinal())
+    elif purpose == "lv_s":
+        await state.update_data(start=day.toordinal(), awaiting="lv_e")
         await start_picker(state, day, max_date)
-        await show(
-            query,
-            f"شروع: {format_date(day)}\n📅 تاریخ پایان مرخصی را انتخاب کنید:",
+        await reply(
+            target,
+            f"شروع: {format_date(day)}\n📅 تاریخ پایان مرخصی را انتخاب کنید.\n{TYPE_DATE_HINT}",
             calendar_for("lv_e", day, day, max_date),
         )
     else:
         await state.update_data(end=day.toordinal())
-        await _ask_reason(query, state)
+        await _ask_reason(target, state)
 
 
 @router.callback_query(StateFilter(LeaveFlow.choosing), TimeCb.filter((F.a == "m") & F.p.in_({"lv_s", "lv_e"})))
@@ -172,10 +178,10 @@ async def choose_time_button(query: CallbackQuery, callback_data: TimeCb, state:
         await _ask_reason(query, state)
 
 
-async def _ask_reason(query: CallbackQuery, state: FSMContext) -> None:
+async def _ask_reason(target: CallbackQuery | Message, state: FSMContext) -> None:
     await state.update_data(awaiting="reason")
     markup = inline([[button("بدون توضیح ⏭", LeaveCb(a="skip_reason").pack())], cancel_row()])
-    await show(query, "✍️ توضیح یا دلیل مرخصی را بنویسید (اختیاری):", markup)
+    await reply(target, "✍️ توضیح یا دلیل مرخصی را بنویسید (اختیاری):", markup)
 
 
 @router.message(StateFilter(LeaveFlow.choosing), F.text)
@@ -195,6 +201,13 @@ async def typed_input(message: Message, state: FSMContext, services: Services, u
         await state.update_data(end_time=value.strftime("%H:%M"), awaiting="reason")
         markup = inline([[button("بدون توضیح ⏭", LeaveCb(a="skip_reason").pack())], cancel_row()])
         await message.answer("✍️ توضیح یا دلیل مرخصی را بنویسید (اختیاری):", reply_markup=markup)
+        return
+    if awaiting in ("lv_d", "lv_s", "lv_e"):
+        day = parse_typed_date(text)
+        if day is None:
+            await message.answer("تاریخ را به شکل ۱۴۰۵/۰۷/۲۶ بنویسید یا از دکمه‌ها انتخاب کنید.")
+            return
+        await _date_chosen(message, state, awaiting, day)
         return
     if awaiting == "reason":
         await state.update_data(reason=text[: services.policy.leave.max_reason_length])

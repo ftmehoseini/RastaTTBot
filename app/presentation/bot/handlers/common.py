@@ -8,9 +8,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.core.exceptions import ExpiredActionError
+from app.core.utils.jalali import JalaliDate
 from app.core.utils.text import normalize_digits
 from app.presentation.bot.callbacks.data import CalCb, TimeCb
-from app.presentation.bot.keyboards.pickers import calendar, minute_picker
+from app.presentation.bot.keyboards.pickers import day_page, minute_picker
 
 router = Router(name="pickers")
 
@@ -62,19 +63,36 @@ async def picker_range(state: FSMContext) -> tuple[date, date]:
     return date.fromordinal(data["cal_min"]), date.fromordinal(data["cal_max"])
 
 
+async def reply(target: CallbackQuery | Message, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    """Answer a button press (by editing its message) or a typed message (with a new message)."""
+    if isinstance(target, CallbackQuery):
+        await show(target, text, markup)
+    else:
+        await target.answer(text, reply_markup=markup)
+
+
+def parse_typed_date(text: str) -> date | None:
+    try:
+        return JalaliDate.parse(text).to_gregorian()
+    except ValueError:
+        return None
+
+
+# Navigation re-sends the text with the new keyboard (edit_text) rather than edit_reply_markup,
+# which not every Telegram-compatible platform implements.
+
+
 @router.callback_query(CalCb.filter(F.a == "m"))
 async def calendar_navigate(query: CallbackQuery, callback_data: CalCb, state: FSMContext) -> None:
     min_date, max_date = await picker_range(state)
-    year, month = divmod(callback_data.v, 100)
-    await query.answer()
-    await query_message(query).edit_reply_markup(
-        reply_markup=calendar(callback_data.p, year, month, min_date, max_date)
-    )
+    page = day_page(callback_data.p, date.fromordinal(callback_data.v), min_date, max_date)
+    await show(query, query_message(query).text or "📅 تاریخ را انتخاب کنید:", page)
 
 
 @router.callback_query(TimeCb.filter(F.a == "h"))
 async def hour_selected(query: CallbackQuery, callback_data: TimeCb, state: FSMContext) -> None:
     if await state.get_state() is None:
         raise ExpiredActionError()
-    await query.answer()
-    await query_message(query).edit_reply_markup(reply_markup=minute_picker(callback_data.p, callback_data.h))
+    await show(
+        query, query_message(query).text or "🕘 دقیقه را انتخاب کنید:", minute_picker(callback_data.p, callback_data.h)
+    )

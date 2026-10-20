@@ -185,18 +185,53 @@ async def test_forgotten_entry_flow_with_typed_minutes(bot: Harness, clock) -> N
     await bot.register(EMP, "مریم کریمی")
     clock.set(tehran(2026, 10, 19, 12, 0))
     await bot.press(EMP, AttCb(a="forgot").pack())
-    await bot.press(EMP, "cor:kind:both")
+    assert "cor:kind:both" not in bot.buttons(EMP)  # «هر دو» was removed
+    await bot.press(EMP, "cor:kind:in")
+    # The day picker lists real dates (no placeholder grid) and can page back in time.
+    assert CalCb(p="corr", a="d", v=date(2026, 10, 18).toordinal()).pack() in bot.buttons(EMP)
+    back = next(b for b in bot.buttons(EMP) if b.startswith("cal:corr:m:"))
+    await bot.press(EMP, back)
+    assert any(b.startswith("cal:corr:d:") for b in bot.buttons(EMP))
     await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 18).toordinal()).pack())
     assert "ساعت ورود" in bot.last_text(EMP)
     await bot.text(EMP, "۰۸:۴۰")
-    assert "ساعت خروج" in bot.last_text(EMP)
-    await bot.press(EMP, "tm:corr_out:h:17:0")  # hour then minute buttons
-    await bot.press(EMP, "tm:corr_out:m:17:15")
     assert "مرور ثبت فراموشی" in bot.last_text(EMP)
     await bot.press(EMP, CorrCb(a="ok").pack())
     assert "ثبت فراموشی انجام شد" in bot.last_text(EMP)
     await bot.press(EMP, CorrCb(a="ok").pack())  # stale confirm
     assert any("منقضی" in a for a in bot.alerts())
+
+    # Forgotten check-out for the same day, with a typed Jalali date and hour/minute buttons.
+    await bot.press(EMP, AttCb(a="forgot").pack())
+    await bot.press(EMP, "cor:kind:out")
+    await bot.text(EMP, "۱۴۰۵/۰۸/۳۰")  # outside the allowed window
+    assert "قابل انتخاب نیست" in bot.last_text(EMP)
+    await bot.text(EMP, "۱۴۰۵/۰۷/۲۶")
+    assert "ساعت خروج" in bot.last_text(EMP)
+    await bot.press(EMP, "tm:corr_out:h:17:0")
+    await bot.press(EMP, "tm:corr_out:m:17:15")
+    await bot.press(EMP, CorrCb(a="ok").pack())
+    assert "ثبت فراموشی انجام شد" in bot.last_text(EMP)
+    await bot.press(EMP, AttCb(a="week").pack())
+    assert "۰۸:۴۰" in bot.last_text(EMP) and "۱۷:۱۵" in bot.last_text(EMP)
+
+
+async def test_hourly_leave_with_typed_date(bot: Harness, clock) -> None:
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    clock.set(tehran(2026, 10, 19, 8, 0))
+    await bot.press(EMP, LeaveCb(a="new").pack())
+    await bot.press(EMP, LeaveCb(a="pay", v="UNPAID").pack())
+    await bot.press(EMP, LeaveCb(a="unit", v="HOURLY").pack())
+    assert any(b.startswith("cal:lv_d:d:") for b in bot.buttons(EMP))
+    await bot.text(EMP, "1405/07/29")
+    assert "ساعت شروع" in bot.last_text(EMP)
+    await bot.text(EMP, "10:00")
+    await bot.text(EMP, "12:30")
+    await bot.press(EMP, LeaveCb(a="skip_reason").pack())
+    assert "۲:۳۰ ساعت" in bot.last_text(EMP)
+    await bot.press(EMP, LeaveCb(a="submit").pack())
+    assert "درخواست جدید برای بررسی" in bot.last_text(SEC)
 
 
 async def test_leave_request_two_step_approval_and_rejection(bot: Harness, clock) -> None:
