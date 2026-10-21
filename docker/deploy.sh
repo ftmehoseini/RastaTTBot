@@ -27,6 +27,17 @@ echo "==> Rebuilding and restarting (migrations run automatically)"
 docker compose up -d --build
 docker image prune -f >/dev/null
 
-sleep 5
 docker compose ps
-curl -fsS http://127.0.0.1:8080/health && echo && echo "==> Deployed $(git rev-parse --short HEAD)"
+
+# The bot needs a few seconds after "Started" before its health server answers.
+echo "==> Waiting for the bot to report healthy"
+for _ in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8080/health; then
+    echo
+    echo "==> Deployed $(git rev-parse --short HEAD)"
+    exit 0
+  fi
+  sleep 2
+done
+echo "Bot did not become healthy in 60s. Check: docker compose logs --tail=50 bot"
+exit 1
