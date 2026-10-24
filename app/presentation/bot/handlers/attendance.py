@@ -10,14 +10,15 @@ from aiogram.types import CallbackQuery, Message
 from app.application.dto.attendance import CorrectionInput
 from app.application.presenters import attendance as texts
 from app.application.services.container import Services
-from app.core.exceptions import ExpiredActionError
+from app.core.exceptions import ConflictError, ExpiredActionError, ValidationError
 from app.core.utils.jalali import format_date
 from app.domain.attendance.models import CorrectionStatus, CorrectionType
 from app.domain.users.models import User
 from app.infrastructure.excel.reports import build_attendance_workbook, report_filename
 from app.presentation.bot.callbacks.data import OPEN_ATTENDANCE, AttCb, CalCb, CorrCb, NavCb, TimeCb
 from app.presentation.bot.handlers.common import (
-    parse_hhmm,
+    TIME_FORMAT_HINT,
+    check_hhmm,
     parse_typed_date,
     picker_range,
     query_message,
@@ -26,8 +27,8 @@ from app.presentation.bot.handlers.common import (
     show,
     start_picker,
 )
-from app.presentation.bot.keyboards.common import back_row, button, cancel_row, confirm_rows, inline
-from app.presentation.bot.keyboards.pickers import TYPE_DATE_HINT, calendar_for, hour_picker
+from app.presentation.bot.keyboards.common import back_row, button, confirm_rows, inline, step_row
+from app.presentation.bot.keyboards.pickers import TYPE_DATE_HINT, calendar_for
 from app.presentation.bot.middlewares.filters import IsRegistered
 from app.presentation.bot.modules import BTN_ATTENDANCE
 from app.presentation.bot.states.flows import Correction
@@ -37,13 +38,14 @@ router.message.filter(IsRegistered())
 router.callback_query.filter(IsRegistered())
 
 MENU_TEXT = "⏱ ورود و خروج\nیکی از گزینه‌ها را انتخاب کنید:"
-KIND_BY_CODE = {"in": CorrectionType.CHECK_IN, "out": CorrectionType.CHECK_OUT, "both": CorrectionType.BOTH}
+KIND_BY_CODE = {"in": CorrectionType.CHECK_IN, "out": CorrectionType.CHECK_OUT}
 
 
 def menu_markup():
     return inline(
         [
-            [button("✅ ثبت ورود", AttCb(a="in").pack()), button("🏁 ثبت خروج", AttCb(a="out").pack())],
+            # Soroush draws rows left to right: listing خروج first puts ورود on the right.
+            [button("🏁 ثبت خروج", AttCb(a="out").pack()), button("✅ ثبت ورود", AttCb(a="in").pack())],
             [button("📝 ثبت فراموشی ورود/خروج", AttCb(a="forgot").pack())],
             [
                 button("📊 گزارش هفتگی من", AttCb(a="week").pack()),
@@ -158,32 +160,28 @@ async def my_excel(query: CallbackQuery, callback_data: AttCb, services: Service
 
 
 # --- forgotten check-in / check-out ------------------------------------------------------------
+# Steps: date → check-in or check-out → typed time → confirm. Every step has "previous step".
+
+
+def _kind_label(kind: str) -> str:
+    return "ورود" if kind == "in" else "خروج"
 
 
 @router.callback_query(AttCb.filter(F.a == "forgot"))
-async def correction_start(query: CallbackQuery, state: FSMContext) -> None:
+async def correction_start(query: CallbackQuery, state: FSMContext, services: Services) -> None:
     await state.clear()
-    markup = inline(
-        [
-            [button("ورود", CorrCb(a="kind", k="in").pack()), button("خروج", CorrCb(a="kind", k="out").pack())],
-            cancel_row(),
-        ]
-    )
-    await show(query, "📝 ثبت فراموشی\nکدام را فراموش کرده‌اید؟", markup)
+    await _ask_date(query, state, services)
 
 
-@router.callback_query(CorrCb.filter(F.a == "kind"))
-async def correction_kind(query: CallbackQuery, callback_data: CorrCb, state: FSMContext, services: Services) -> None:
-    if callback_data.k not in KIND_BY_CODE:
-        raise ExpiredActionError()
+async def _ask_date(query: CallbackQuery, state: FSMContext, services: Services) -> None:
     min_date, max_date = services.attendance.correction_date_window()
+    back = NavCb(to="att").pack()
     await state.set_state(Correction.choosing_date)
-    await state.update_data(kind=callback_data.k)
-    await start_picker(state, min_date, max_date)
+    await start_picker(state, min_date, max_date, back=back)
     await show(
         query,
-        f"📅 تاریخ روزی را که ثبت نشده انتخاب کنید.\n{TYPE_DATE_HINT}",
-        calendar_for("corr", services.time.today(), min_date, max_date),
+        f"📝 ثبت فراموشی\n📅 تاریخ روزی را که ثبت نشده انتخاب کنید.\n{TYPE_DATE_HINT}",
+        calendar_for("corr", services.time.today(), min_date, max_date, back=back),
     )
 
 
@@ -209,66 +207,98 @@ async def _date_chosen(target: CallbackQuery | Message, state: FSMContext, day: 
             f"این تاریخ قابل انتخاب نیست. فقط از {format_date(min_date)} تا {format_date(max_date)} مجاز است.",
         )
         return
-    data = await state.get_data()
     await state.update_data(day=day.toordinal())
-    await state.set_state(Correction.choosing_time)
-    await _ask_time(target, "out" if data["kind"] == "out" else "in", day)
+    await _ask_kind(target, state, day)
 
 
-async def _ask_time(target: CallbackQuery | Message, step: str, day: date) -> None:
-    label = "ورود" if step == "in" else "خروج"
+async def _ask_kind(target: CallbackQuery | Message, state: FSMContext, day: date) -> None:
+    await state.set_state(Correction.choosing_kind)
+    markup = inline(
+        [
+            # Soroush draws the row left to right: ورود ends up on the right.
+            [button("خروج", CorrCb(a="kind", k="out").pack()), button("ورود", CorrCb(a="kind", k="in").pack())],
+            step_row(CorrCb(a="back", k="date").pack()),
+        ]
+    )
+    await reply(target, f"📝 ثبت فراموشی — {format_date(day)}\nکدام را فراموش کرده‌اید؟", markup)
+
+
+@router.callback_query(StateFilter(Correction.choosing_kind), CorrCb.filter(F.a == "kind"))
+async def correction_kind(query: CallbackQuery, callback_data: CorrCb, state: FSMContext) -> None:
+    if callback_data.k not in ("in", "out"):
+        raise ExpiredActionError()
+    await state.update_data(kind=callback_data.k)
+    await _ask_time(query, state)
+
+
+async def _ask_time(target: CallbackQuery | Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.set_state(Correction.typing_time)
+    day = date.fromordinal(data["day"])
     await reply(
         target,
-        f"🕘 ساعت {label} روز {format_date(day)} را انتخاب کنید.\nیا ساعت دقیق را به شکل ۰۸:۴۵ بنویسید.",
-        hour_picker(f"corr_{step}"),
+        f"🕘 ساعت {_kind_label(data['kind'])} روز {format_date(day)} را بنویسید.\n{TIME_FORMAT_HINT}",
+        inline([step_row(CorrCb(a="back", k="kind").pack())]),
     )
 
 
-@router.callback_query(StateFilter(Correction.choosing_time), TimeCb.filter((F.a == "m") & F.p.startswith("corr_")))
-async def correction_time_button(query: CallbackQuery, callback_data: TimeCb, state: FSMContext) -> None:
-    await _time_chosen(query, state, callback_data.p.removeprefix("corr_"), time(callback_data.h, callback_data.m))
-
-
-@router.message(StateFilter(Correction.choosing_time), F.text)
-async def correction_time_typed(message: Message, state: FSMContext) -> None:
-    value = parse_hhmm(message.text or "")
-    if value is None:
-        await message.answer("ساعت را به شکل ۰۸:۴۵ بنویسید یا از دکمه‌ها انتخاب کنید.")
+@router.message(StateFilter(Correction.typing_time), F.text)
+async def correction_time_typed(message: Message, state: FSMContext, services: Services, user: User) -> None:
+    back = inline([step_row(CorrCb(a="back", k="kind").pack())])
+    value, problem = check_hhmm(message.text or "")
+    if problem:
+        await message.answer(problem, reply_markup=back)
         return
     data = await state.get_data()
-    step = "out" if data["kind"] == "out" or "in_time" in data else "in"
-    await _time_chosen(message, state, step, value)
-
-
-async def _time_chosen(target: CallbackQuery | Message, state: FSMContext, step: str, value: time) -> None:
-    await state.update_data({f"{step}_time": value.strftime("%H:%M")})
-    data = await state.get_data()
-    day = date.fromordinal(data["day"])
-    if data["kind"] == "both" and step == "in":
-        await _ask_time(target, "out", day)
+    draft = _correction_input({**data, f"{data['kind']}_time": value.strftime("%H:%M")})
+    try:
+        # Check against the day's records now, so the person can fix the time without starting over.
+        await services.attendance.validate_correction(user, draft)
+    except (ValidationError, ConflictError) as exc:
+        await message.answer(f"❌ {exc.user_message}\nساعت دیگری بنویسید یا «مرحله قبل» را بزنید.", reply_markup=back)
         return
+    await state.update_data({"in_time": None, "out_time": None, f"{data['kind']}_time": value.strftime("%H:%M")})
     await state.set_state(Correction.confirming)
-    text = texts.correction_review(KIND_BY_CODE[data["kind"]], day, data.get("in_time"), data.get("out_time"))
-    await reply(target, text, inline(confirm_rows(CorrCb(a="ok").pack())))
-
-
-@router.callback_query(StateFilter(Correction.confirming), CorrCb.filter(F.a == "ok"))
-async def correction_confirm(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
     data = await state.get_data()
-    await state.clear()
+    text = texts.correction_review(KIND_BY_CODE[data["kind"]], draft.work_date, data["in_time"], data["out_time"])
+    await message.answer(
+        text, reply_markup=inline(confirm_rows(CorrCb(a="ok").pack(), CorrCb(a="back", k="time").pack()))
+    )
 
+
+@router.callback_query(StateFilter(Correction), CorrCb.filter(F.a == "back"))
+async def correction_back(query: CallbackQuery, callback_data: CorrCb, state: FSMContext, services: Services) -> None:
+    data = await state.get_data()
+    if callback_data.k == "date":
+        await _ask_date(query, state, services)
+    elif callback_data.k == "kind" and "day" in data:
+        await _ask_kind(query, state, date.fromordinal(data["day"]))
+    elif callback_data.k == "time" and "kind" in data:
+        await _ask_time(query, state)
+    else:
+        raise ExpiredActionError()
+
+
+def _correction_input(data: dict) -> CorrectionInput:
     def to_time(value: str | None) -> time | None:
         return time.fromisoformat(value) if value else None
 
-    result = await services.attendance.submit_correction(
-        user,
-        CorrectionInput(
+    try:
+        return CorrectionInput(
             correction_type=KIND_BY_CODE[data["kind"]],
             work_date=date.fromordinal(data["day"]),
             check_in_time=to_time(data.get("in_time")),
             check_out_time=to_time(data.get("out_time")),
-        ),
-    )
+        )
+    except KeyError:
+        raise ExpiredActionError() from None
+
+
+@router.callback_query(StateFilter(Correction.confirming), CorrCb.filter(F.a == "ok"))
+async def correction_confirm(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    draft = _correction_input(await state.get_data())
+    await state.clear()
+    result = await services.attendance.submit_correction(user, draft)
     if result.status == CorrectionStatus.PENDING_APPROVAL:
         text = "📨 ثبت فراموشی شما ذخیره شد و پس از تأیید مدیر اعمال می‌شود."
     else:
@@ -276,7 +306,8 @@ async def correction_confirm(query: CallbackQuery, state: FSMContext, services: 
     await show(query, text, back_to_menu())
 
 
-@router.callback_query(CorrCb.filter(F.a == "ok"))
+# Buttons from an old or finished dialog.
+@router.callback_query(CorrCb.filter())
 @router.callback_query(CalCb.filter(F.p == "corr"))
 @router.callback_query(TimeCb.filter(F.p.startswith("corr_")))
 async def correction_stale(query: CallbackQuery) -> None:

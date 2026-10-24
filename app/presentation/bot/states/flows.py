@@ -7,7 +7,8 @@ class Registration(StatesGroup):
 
 class Correction(StatesGroup):
     choosing_date = State()
-    choosing_time = State()  # hour/minute buttons or typed HH:MM
+    choosing_kind = State()  # check-in or check-out
+    typing_time = State()  # typed HH:MM
     confirming = State()
 
 

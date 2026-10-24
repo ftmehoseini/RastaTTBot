@@ -1,6 +1,6 @@
 """Attendance rules: live check-in/out, forgotten-entry corrections, daily calculation and reports."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from uuid import UUID
 
@@ -31,7 +31,12 @@ from app.core.utils.jalali import (
     month_range,
     week_range,
 )
-from app.domain.attendance.calculation import DailyCalculation, ScheduleResolver, get_calculation_policy
+from app.domain.attendance.calculation import (
+    HOURLY_POLICY,
+    DailyCalculation,
+    ScheduleResolver,
+    get_calculation_policy,
+)
 from app.domain.attendance.models import (
     AttendanceDailySummary,
     AttendanceManualCorrection,
@@ -51,6 +56,18 @@ from app.infrastructure.repositories.users import UserRepository
 
 # A confirmed time may be at most this far in the future (clock skew between workers).
 _CLOCK_SKEW = timedelta(minutes=1)
+
+
+@dataclass(frozen=True)
+class _CorrectionPlan:
+    record: AttendanceRecord | None
+    now: datetime
+    needs_in: bool
+    needs_out: bool
+    current_in: datetime | None
+    current_out: datetime | None
+    new_in: datetime | None
+    new_out: datetime | None
 
 
 def parse_holidays(values: list[str]) -> set[date]:
@@ -211,37 +228,17 @@ class AttendanceService:
             latest = today + timedelta(days=7)
         return earliest, latest
 
+    async def validate_correction(self, user: User, data: CorrectionInput) -> None:
+        """Run every check of submit_correction without saving, so a wrong time is rejected right away."""
+        access.require(user, Permission.ATTENDANCE_SELF)
+        await self._plan_correction(user, data, for_update=False)
+
     async def submit_correction(self, user: User, data: CorrectionInput) -> CorrectionResult:
         access.require(user, Permission.ATTENDANCE_SELF)
-        earliest, latest = self.correction_date_window()
-        if data.work_date > latest:
-            raise ValidationError("این تاریخ هنوز نرسیده یا ثبت اصلاحیه برای آن مجاز نیست.")
-        if data.work_date < earliest:
-            raise ValidationError(
-                f"ثبت فراموشی فقط تا {self.policy.max_manual_correction_age_days} روز گذشته امکان‌پذیر است."
-            )
-        needs_in = data.correction_type in (CorrectionType.CHECK_IN, CorrectionType.BOTH)
-        needs_out = data.correction_type in (CorrectionType.CHECK_OUT, CorrectionType.BOTH)
-        if (needs_in and data.check_in_time is None) or (needs_out and data.check_out_time is None):
-            raise ValidationError("ساعت ورود یا خروج وارد نشده است.")
-
-        record = await self.records.get_for_day(user.id, data.work_date, for_update=True)
-        now = self.time.now_utc()
-        current_in = ensure_utc(record.check_in_at) if record else None
-        current_out = ensure_utc(record.check_out_at) if record else None
-
-        new_in = self.time.local_to_utc(data.work_date, data.check_in_time) if needs_in else current_in
-        new_out = None
-        if needs_out:
-            new_out = self.time.local_to_utc(data.work_date, data.check_out_time)
-            # A check-out clock time earlier than the check-in means the shift crossed midnight.
-            if new_in is not None and new_out <= new_in:
-                new_out = self.time.local_to_utc(data.work_date + timedelta(days=1), data.check_out_time)
-        else:
-            new_out = current_out
-
-        self._validate_correction(data, now, current_in, current_out, new_in, new_out)
-        await self._validate_neighbours(user.id, data.work_date, new_in, new_out)
+        plan = await self._plan_correction(user, data, for_update=True)
+        record, now = plan.record, plan.now
+        needs_in, needs_out = plan.needs_in, plan.needs_out
+        current_in, current_out, new_in, new_out = plan.current_in, plan.current_out, plan.new_in, plan.new_out
 
         status = (
             CorrectionStatus.PENDING_APPROVAL
@@ -308,6 +305,39 @@ class AttendanceService:
             check_out_local=self.time.to_local(new_out) if new_out else None,
         )
 
+    async def _plan_correction(self, user: User, data: CorrectionInput, for_update: bool) -> _CorrectionPlan:
+        """Validate a forgotten entry and work out the new check-in/out times (UTC)."""
+        earliest, latest = self.correction_date_window()
+        if data.work_date > latest:
+            raise ValidationError("این تاریخ هنوز نرسیده یا ثبت اصلاحیه برای آن مجاز نیست.")
+        if data.work_date < earliest:
+            raise ValidationError(
+                f"ثبت فراموشی فقط تا {self.policy.max_manual_correction_age_days} روز گذشته امکان‌پذیر است."
+            )
+        needs_in = data.correction_type in (CorrectionType.CHECK_IN, CorrectionType.BOTH)
+        needs_out = data.correction_type in (CorrectionType.CHECK_OUT, CorrectionType.BOTH)
+        if (needs_in and data.check_in_time is None) or (needs_out and data.check_out_time is None):
+            raise ValidationError("ساعت ورود یا خروج وارد نشده است.")
+
+        record = await self.records.get_for_day(user.id, data.work_date, for_update=for_update)
+        now = self.time.now_utc()
+        current_in = ensure_utc(record.check_in_at) if record else None
+        current_out = ensure_utc(record.check_out_at) if record else None
+
+        new_in = self.time.local_to_utc(data.work_date, data.check_in_time) if needs_in else current_in
+        new_out = None
+        if needs_out:
+            new_out = self.time.local_to_utc(data.work_date, data.check_out_time)
+            # A check-out clock time earlier than the check-in means the shift crossed midnight.
+            if new_in is not None and new_out <= new_in:
+                new_out = self.time.local_to_utc(data.work_date + timedelta(days=1), data.check_out_time)
+        else:
+            new_out = current_out
+
+        self._validate_correction(data, now, current_in, current_out, new_in, new_out)
+        await self._validate_neighbours(user.id, data.work_date, new_in, new_out)
+        return _CorrectionPlan(record, now, needs_in, needs_out, current_in, current_out, new_in, new_out)
+
     def _validate_correction(
         self,
         data: CorrectionInput,
@@ -332,7 +362,7 @@ class AttendanceService:
                     f"خروج این روز قبلاً ساعت {format_time(self.time.to_local(current_out))} ثبت شده است."
                 )
             if current_in is None and not self.policy.allow_checkout_without_checkin:
-                raise ConflictError("برای این روز ورودی ثبت نشده است. گزینه‌ی «هر دو» را انتخاب کنید.")
+                raise ConflictError("برای این روز ورودی ثبت نشده است. اول «ورود» این روز را ثبت کنید، بعد خروج را.")
         if new_in and new_out:
             if new_out <= new_in:
                 raise ValidationError("ساعت خروج باید بعد از ساعت ورود باشد.")
@@ -355,7 +385,8 @@ class AttendanceService:
         schedule = self.schedules.for_day(work_date, user.schedule_code)
         check_in = self.time.to_local(record.check_in_at) if record and record.check_in_at else None
         check_out = self.time.to_local(record.check_out_at) if record and record.check_out_at else None
-        return self.calculator.calculate(schedule, check_in, check_out)
+        calculator = HOURLY_POLICY if schedule.hourly else self.calculator
+        return calculator.calculate(schedule, check_in, check_out)
 
     async def _refresh_summary(self, user: User, record: AttendanceRecord) -> DailyCalculation:
         calc = self.calculate(user, record.work_date, record)
@@ -379,7 +410,7 @@ class AttendanceService:
         summary.overtime_minutes = calc.overtime_minutes
         summary.deficit_minutes = calc.deficit_minutes
         summary.net_balance_minutes = calc.net_balance_minutes
-        summary.policy_name = self.calculator.name
+        summary.policy_name = HOURLY_POLICY.name if calc.hourly else self.calculator.name
         summary.calculated_at = self.time.now_utc()
         await self.session.flush()
         return calc
@@ -460,8 +491,9 @@ class AttendanceService:
         for day in iter_days(start, end):
             record = by_date.get(day)
             is_workday = self.schedules.is_workday(day)
-            # Future days and non-workdays without a record are not part of the report.
-            if record is None and (day > today or not is_workday):
+            # Future days and non-workdays without a record are not part of the report, and
+            # hourly staff only have the days they came in.
+            if record is None and (day > today or not is_workday or user.is_hourly):
                 continue
             if record is None and day == today:
                 continue
@@ -479,9 +511,11 @@ class AttendanceService:
                     correction_notes=notes.get(day, []),
                 )
             )
-        report = EmployeeReport(user.id, user.full_name, user.messenger_user_id, start, end, rows, Totals.of(rows))
-        # Monthly caps only make sense for a report covering exactly one Jalali month.
-        if (start, end) == month_range(start):
+        report = EmployeeReport(
+            user.id, user.full_name, user.messenger_user_id, start, end, rows, Totals.of(rows), hourly=user.is_hourly
+        )
+        # Monthly caps only make sense for full-time staff and a report covering exactly one Jalali month.
+        if not user.is_hourly and (start, end) == month_range(start):
             report = replace(
                 report,
                 late_cap_minutes=self.policy.monthly_unauthorized_late_cap_minutes,
@@ -502,7 +536,8 @@ class AttendanceService:
         employees = await self.users.list_active_employees()
         checked_in = await self.records.user_ids_checked_in_on(day)
         on_leave = await self._on_daily_leave(day)
-        return [u for u in employees if u.id not in checked_in and u.id not in on_leave]
+        # Hourly staff don't come in every day, so they get no "you haven't checked in" reminder.
+        return [u for u in employees if u.id not in checked_in and u.id not in on_leave and not u.is_hourly]
 
     async def check_out_reminder_recipients(self, day: date) -> list[tuple[User, AttendanceRecord]]:
         open_records = await self.records.open_records_on(day)

@@ -16,6 +16,7 @@ from app.domain.attendance.models import (
     RecordSource,
 )
 from app.domain.audit.models import AuditAction, AuditLog
+from app.domain.users.models import SCHEDULE_HOURLY
 from app.tests.conftest import tehran
 
 MONDAY = date(2026, 10, 19)
@@ -238,3 +239,23 @@ async def test_monthly_report_carries_caps(services, make_user, clock) -> None:
     assert month.totals.late_minutes >= 30 and month.totals.early_departure_minutes >= 48
     week = await services.attendance.my_week(user)
     assert (week.late_cap_minutes, week.early_cap_minutes) == (0, 0)  # caps are monthly only
+
+
+async def test_hourly_staff_only_track_worked_time(services, make_user, clock) -> None:
+    hourly = await make_user("نیروی ساعتی")
+    hourly.schedule_code = SCHEDULE_HOURLY
+    clock.set(tehran(2026, 10, 19, 12, 0))
+    await services.attendance.submit_correction(
+        hourly, CorrectionInput(CorrectionType.BOTH, date(2026, 10, 18), time(10, 0), time(14, 30))
+    )
+    week = await services.attendance.my_week(hourly)
+    assert [r.work_date for r in week.rows] == [date(2026, 10, 18)]  # no "absent" days for hourly staff
+    c = week.rows[0].calculation
+    assert c.hourly and c.gross_worked_minutes == 270
+    assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes, c.overtime_minutes) == (0, 0, 0, 0)
+    assert c.deficit_minutes == 0 and week.totals.absent_days == 0
+    month = await services.attendance.my_month(hourly)
+    assert month.hourly and (month.late_cap_minutes, month.early_cap_minutes) == (0, 0)
+    full_time = await make_user("نیروی تمام‌وقت")
+    recipients = await services.attendance.check_in_reminder_recipients(MONDAY)
+    assert full_time in recipients and hourly not in recipients

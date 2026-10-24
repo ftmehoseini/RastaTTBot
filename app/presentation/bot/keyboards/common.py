@@ -9,6 +9,7 @@ BTN_HELP = "ℹ️ راهنما"
 BTN_BACK = "🔙 بازگشت"
 BTN_CANCEL = "✖️ لغو"
 BTN_CONFIRM = "✅ تأیید"
+BTN_STEP_BACK = "🔙 مرحله قبل"
 
 
 def button(text: str, data: str) -> InlineKeyboardButton:
@@ -28,8 +29,19 @@ def cancel_row() -> list[InlineKeyboardButton]:
     return [button(BTN_CANCEL, NavCb(to="cancel").pack())]
 
 
-def confirm_rows(confirm_data: str) -> list[list[InlineKeyboardButton]]:
-    return [[button(BTN_CONFIRM, confirm_data), button(BTN_CANCEL, NavCb(to="cancel").pack())]]
+def step_row(back_data: str | None) -> list[InlineKeyboardButton]:
+    """Cancel plus "previous step" for wizard steps. Soroush draws rows left to right, so the
+    button listed last ends up on the right, where Persian readers look first."""
+    if back_data is None:
+        return cancel_row()
+    return [button(BTN_CANCEL, NavCb(to="cancel").pack()), button(BTN_STEP_BACK, back_data)]
+
+
+def confirm_rows(confirm_data: str, back_data: str | None = None) -> list[list[InlineKeyboardButton]]:
+    rows = [[button(BTN_CONFIRM, confirm_data), button(BTN_CANCEL, NavCb(to="cancel").pack())]]
+    if back_data is not None:
+        rows.append([button(BTN_STEP_BACK, back_data)])
+    return rows
 
 
 def noop(text: str) -> InlineKeyboardButton:

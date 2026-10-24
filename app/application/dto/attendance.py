@@ -106,6 +106,7 @@ class EmployeeReport:
     # Monthly caps, set only when the report covers one whole Jalali month (0 = no cap)
     late_cap_minutes: int = 0
     early_cap_minutes: int = 0
+    hourly: bool = False
 
 
 @dataclass(frozen=True)

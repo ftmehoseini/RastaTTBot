@@ -7,6 +7,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column, utc_timestamp
 from app.core.security.rbac import RoleCode
 
+# User.schedule_code of hourly staff: only check-in, check-out and worked time are tracked for them.
+SCHEDULE_HOURLY = "hourly"
+
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "users"
@@ -27,6 +30,10 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         foreign_keys="UserRole.user_id",
     )
+
+    @property
+    def is_hourly(self) -> bool:
+        return self.schedule_code == SCHEDULE_HOURLY
 
     @property
     def roles(self) -> set[RoleCode]:

@@ -14,14 +14,14 @@ class NavCb(CallbackData, prefix="nav"):
 
 
 class AttCb(CallbackData, prefix="att"):
-    a: str  # in | out | in_ok | out_ok | status | week | week_xls | forgot
+    a: str  # in | out | in_ok | out_ok | status | week | week_xls | month | month_xls | forgot
     ts: int = 0  # UTC epoch seconds of the previewed time
     d: int = 0  # work date ordinal (check-out of a night shift)
 
 
 class CorrCb(CallbackData, prefix="cor"):
-    a: str  # kind | ok
-    k: str = ""  # in | out | both
+    a: str  # kind | back | ok
+    k: str = ""  # kind: in | out; back: the step to return to (date | kind | time)
 
 
 class CalCb(CallbackData, prefix="cal"):
@@ -38,7 +38,7 @@ class TimeCb(CallbackData, prefix="tm"):
 
 
 class LeaveCb(CallbackData, prefix="lv"):
-    a: str  # new | pay | unit | skip_reason | submit | mine | status | view | cancel
+    a: str  # new | pay | unit | back | skip_reason | submit | mine | status | view | cancel
     v: str = ""
 
 
@@ -65,7 +65,7 @@ class AdminCb(CallbackData, prefix="adm"):
 
 
 class UserAdminCb(CallbackData, prefix="ua"):
-    a: str  # list | view | role | active
+    a: str  # list | view | role | active | hourly
     u: str = ""  # user id hex
     r: str = ""  # role code
     p: int = 0  # page or on/off flag

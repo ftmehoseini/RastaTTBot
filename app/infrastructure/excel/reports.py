@@ -79,6 +79,27 @@ def _over_cap(used: int, cap: int) -> int | str:
     return max(0, used - cap) if cap else ""
 
 
+def _summary_row(r: EmployeeReport) -> list:
+    t = r.totals
+    head = [r.full_name, "ساعتی" if r.hourly else "تمام‌وقت", t.present_days, t.incomplete_days]
+    if r.hourly:
+        return [*head, "", minutes_cell(t.worked_minutes), *[""] * 9]
+    return [
+        *head,
+        t.absent_days,
+        minutes_cell(t.worked_minutes),
+        minutes_cell(t.required_minutes),
+        t.early_departure_minutes,
+        _over_cap(t.early_departure_minutes, r.early_cap_minutes),
+        t.floating_late_minutes,
+        t.late_minutes,
+        _over_cap(t.late_minutes, r.late_cap_minutes),
+        minutes_cell(t.overtime_minutes),
+        minutes_cell(t.deficit_minutes),
+        minutes_cell(t.net_balance_minutes),
+    ]
+
+
 def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
     workbook = new_workbook()
     rows = []
@@ -98,13 +119,20 @@ def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
                     row.check_in_local.strftime("%H:%M") if row.check_in_local else "",
                     check_out,
                     minutes_cell(c.gross_worked_minutes),
-                    minutes_cell(c.required_minutes),
-                    c.early_departure_minutes,
-                    c.floating_late_minutes,
-                    c.late_minutes,
-                    minutes_cell(c.overtime_minutes),
-                    minutes_cell(c.deficit_minutes),
-                    minutes_cell(c.net_balance_minutes),
+                    # Hourly staff have no fixed day, so these columns stay empty for them.
+                    *(
+                        [""] * 7
+                        if c.hourly
+                        else [
+                            minutes_cell(c.required_minutes),
+                            c.early_departure_minutes,
+                            c.floating_late_minutes,
+                            c.late_minutes,
+                            minutes_cell(c.overtime_minutes),
+                            minutes_cell(c.deficit_minutes),
+                            minutes_cell(c.net_balance_minutes),
+                        ]
+                    ),
                     DAY_STATUS_FA[c.status],
                     _source(row.check_in_source),
                     _source(row.check_out_source),
@@ -115,6 +143,7 @@ def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
 
     summary_columns = [
         Column("نام کارمند", 22),
+        Column("نوع همکاری", 11),
         Column("روزهای کامل", 11),
         Column("روزهای ناقص", 11),
         Column("غیبت", 8),
@@ -129,25 +158,7 @@ def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
         Column("کسری", 10),
         Column("خالص", 10),
     ]
-    summary_rows = [
-        [
-            r.full_name,
-            r.totals.present_days,
-            r.totals.incomplete_days,
-            r.totals.absent_days,
-            minutes_cell(r.totals.worked_minutes),
-            minutes_cell(r.totals.required_minutes),
-            r.totals.early_departure_minutes,
-            _over_cap(r.totals.early_departure_minutes, r.early_cap_minutes),
-            r.totals.floating_late_minutes,
-            r.totals.late_minutes,
-            _over_cap(r.totals.late_minutes, r.late_cap_minutes),
-            minutes_cell(r.totals.overtime_minutes),
-            minutes_cell(r.totals.deficit_minutes),
-            minutes_cell(r.totals.net_balance_minutes),
-        ]
-        for r in reports
-    ]
+    summary_rows = [_summary_row(r) for r in reports]
     add_table_sheet(workbook, "خلاصه", summary_columns, summary_rows)
     return to_bytes(workbook)
 

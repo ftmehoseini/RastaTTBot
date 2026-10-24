@@ -44,6 +44,8 @@ def punch_saved(kind: str, at_local: datetime, calc: DailyCalculation | None) ->
     text = f"🏁 خروج شما ثبت شد.\n📅 {format_date(at_local.date())}\n🕘 ساعت {format_time(at_local)}"
     if calc and calc.gross_worked_minutes is not None:
         text += f"\n⏳ کارکرد امروز: {format_minutes(calc.gross_worked_minutes)}"
+        if calc.hourly:
+            return text
         if calc.early_departure_minutes:
             text += f"\n⚠️ تعجیل: {format_minutes(calc.early_departure_minutes)}"
         if calc.overtime_minutes:
@@ -56,6 +58,12 @@ def today_status(day: date, calc: DailyCalculation) -> str:
     lines = [f"📋 وضعیت امروز — {format_date(day)}"]
     lines.append(f"ورود: {format_time(calc.check_in) if calc.check_in else 'ثبت نشده'}")
     lines.append(f"خروج: {format_time(calc.check_out) if calc.check_out else 'ثبت نشده'}")
+    if calc.hourly:
+        if calc.gross_worked_minutes is not None:
+            lines.append(f"کارکرد: {format_minutes(calc.gross_worked_minutes)}")
+        elif calc.check_in:
+            lines.append("⏳ در حال کار")
+        return "\n".join(lines)
     if calc.check_out:
         lines.append(f"تعجیل: {format_minutes(calc.early_departure_minutes)}")
     if calc.check_in:
@@ -86,6 +94,8 @@ def _day_line(row: DayRow) -> str:
         lines.append("   ⚠️ خروج ثبت نشده")
     elif c.status == DayStatus.MISSING_CHECK_IN:
         lines.append("   ⚠️ ورود ثبت نشده")
+    elif c.hourly:
+        lines.append(f"   کارکرد {format_minutes(c.gross_worked_minutes)}")
     else:
         lines.append(
             f"   تعجیل {format_minutes(c.early_departure_minutes)} | تأخیر مجاز {format_minutes(c.floating_late_minutes)}"
@@ -122,6 +132,15 @@ def employee_report(report: EmployeeReport, title: str = "گزارش هفتگی 
         lines.extend(_day_line(r) for r in report.rows)
         lines.append("")
     t = report.totals
+    if report.hourly:
+        lines += [
+            "— جمع (نیروی ساعتی) —",
+            f"روزهای حضور: {to_persian_digits(t.present_days)} | ناقص: {to_persian_digits(t.incomplete_days)}",
+            f"کارکرد: {format_minutes(t.worked_minutes)}",
+        ]
+        if any(r.is_manual for r in report.rows):
+            lines.append("\n✍️ = ثبت دستی (فراموشی)")
+        return "\n".join(lines)
     lines += [
         "— جمع —",
         f"روزهای کامل: {to_persian_digits(t.present_days)} | ناقص: {to_persian_digits(t.incomplete_days)}"

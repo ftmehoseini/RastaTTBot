@@ -9,7 +9,7 @@ from app.core.security.rbac import Permission, RoleCode
 from app.core.utils.clock import TimeService
 from app.core.utils.text import clean_text
 from app.domain.audit.models import AuditAction
-from app.domain.users.models import User, UserRole
+from app.domain.users.models import SCHEDULE_HOURLY, User, UserRole
 from app.infrastructure.repositories.audit import AuditRepository
 from app.infrastructure.repositories.users import RoleRepository, UserRepository
 
@@ -126,6 +126,25 @@ class UserService:
             target.is_active = active
             action = AuditAction.USER_ACTIVATED if active else AuditAction.USER_DEACTIVATED
             self.audit.record(action, "user", target.id, actor.id, {})
+            await self.session.commit()
+        return target
+
+    async def set_hourly(self, actor: User, target_id: UUID, hourly: bool) -> User:
+        """Switch a user between full-time (organization rules) and hourly (only worked time)."""
+        access.require(actor, Permission.USERS_MANAGE_ROLES)
+        target = await self.users.get(target_id, for_update=True)
+        if target is None:
+            raise NotFoundError("کاربر پیدا نشد.")
+        code = SCHEDULE_HOURLY if hourly else None
+        if target.schedule_code != code:
+            self.audit.record(
+                AuditAction.USER_SCHEDULE_CHANGED,
+                "user",
+                target.id,
+                actor.id,
+                {"from": target.schedule_code, "to": code},
+            )
+            target.schedule_code = code
             await self.session.commit()
         return target
 

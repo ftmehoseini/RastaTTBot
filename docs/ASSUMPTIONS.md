@@ -21,7 +21,9 @@ These were decided without asking, to keep work moving. Each one is configurable
 - Workdays are Saturday–Thursday (`attendance.workdays`). On non-workdays and configured holidays the required work is 0 and every worked minute is overtime; reminders are not sent.
 - The default calculation policy is exactly the formula in the brief (`standard_deduction`). Overtime is rounded **down** to `overtime_rounding_minutes`. Late/early minutes are not rounded.
 - Manual corrections are applied immediately (`attendance.manual_correction_requires_approval: false`). The data model and service already support a `PENDING_APPROVAL` status. **Confirm** whether managers must approve them.
-- "Both" in the forgotten flow means check-in and check-out for the same day are entered together.
+- The forgotten-entry dialog enters one time at a time (ورود or خروج); a day where both were forgotten is two entries, check-in first.
+- Floating check-in: arriving inside the window (08:00–09:30) is not deducted, but worked time still counts against the 8:48 day, so it can leave a deficit (کسری) if the person does not stay later.
+- Hourly staff have no fixed hours, so lateness, early departure, overtime, deficit and the monthly caps are not computed for them.
 
 ## Leave
 

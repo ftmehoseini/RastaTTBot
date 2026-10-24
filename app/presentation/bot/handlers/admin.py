@@ -302,7 +302,8 @@ def _user_card(target: User, services: Services) -> str:
     return (
         f"👤 {target.full_name}\n🆔 شناسه: {target.messenger_user_id}\n"
         f"نام کاربری: {'@' + target.username if target.username else '—'}\n"
-        f"وضعیت: {'فعال ✅' if target.is_active else 'غیرفعال ⛔'}\nنقش‌ها: {roles}\nثبت‌نام: {registered}"
+        f"وضعیت: {'فعال ✅' if target.is_active else 'غیرفعال ⛔'}\nنقش‌ها: {roles}\n"
+        f"نوع همکاری: {'ساعتی ⏰' if target.is_hourly else 'تمام‌وقت'}\nثبت‌نام: {registered}"
     )
 
 
@@ -324,6 +325,14 @@ def _user_markup(target: User, actor: User):
                 button(
                     "⛔ غیرفعال کردن" if target.is_active else "✅ فعال کردن",
                     UserAdminCb(a="active", u=target.id.hex, p=0 if target.is_active else 1).pack(),
+                )
+            ]
+        )
+        rows.append(
+            [
+                button(
+                    "🕘 تبدیل به تمام‌وقت" if target.is_hourly else "⏰ تبدیل به نیروی ساعتی",
+                    UserAdminCb(a="hourly", u=target.id.hex, p=0 if target.is_hourly else 1).pack(),
                 )
             ]
         )
@@ -358,6 +367,17 @@ async def user_role(query: CallbackQuery, callback_data: UserAdminCb, services: 
 async def user_active(query: CallbackQuery, callback_data: UserAdminCb, services: Services, user: User) -> None:
     target = await services.users.set_active(user, UUID(hex=callback_data.u), bool(callback_data.p))
     await show(query, _user_card(target, services), _user_markup(target, user))
+
+
+@router.callback_query(UserAdminCb.filter(F.a == "hourly"))
+async def user_hourly(query: CallbackQuery, callback_data: UserAdminCb, services: Services, user: User) -> None:
+    target = await services.users.set_hourly(user, UUID(hex=callback_data.u), bool(callback_data.p))
+    note = (
+        "نیروی ساعتی: فقط ورود، خروج و کارکرد ثبت می‌شود (بدون تأخیر، تعجیل، اضافه‌کار و سقف ماهانه)."
+        if target.is_hourly
+        else "تمام‌وقت: قوانین ساعت رسمی، تأخیر مجاز/غیرمجاز، تعجیل و اضافه‌کار اعمال می‌شود."
+    )
+    await show(query, f"{_user_card(target, services)}\n\n✔️ {note}", _user_markup(target, user))
 
 
 @router.message(Command("user"))

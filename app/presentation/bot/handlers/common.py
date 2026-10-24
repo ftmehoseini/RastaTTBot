@@ -21,14 +21,25 @@ router = Router(name="pickers")
 _TIME_RE = re.compile(r"^\s*(\d{1,2})\s*[:.٫]\s*(\d{2})\s*$")
 
 
+TIME_FORMAT_HINT = "ساعت را ۲۴ ساعته و به شکل «ساعت:دقیقه» بنویسید.\nنمونه: ۰۸:۴۵ یا ۱۳:۰۵ یا ۱۷:۳۰"
+
+
 def parse_hhmm(text: str) -> time | None:
+    value, _ = check_hhmm(text)
+    return value
+
+
+def check_hhmm(text: str) -> tuple[time | None, str | None]:
+    """Parse a typed 24-hour HH:MM time. Returns (time, None) or (None, Persian reason)."""
     match = _TIME_RE.match(normalize_digits(text or ""))
     if not match:
-        return None
+        return None, f"❌ قالب ساعت درست نیست.\n{TIME_FORMAT_HINT}"
     hour, minute = int(match.group(1)), int(match.group(2))
-    if hour > 23 or minute > 59:
-        return None
-    return time(hour, minute)
+    if hour > 23:
+        return None, f"❌ ساعت باید بین ۰۰ تا ۲۳ باشد.\n{TIME_FORMAT_HINT}"
+    if minute > 59:
+        return None, f"❌ دقیقه باید بین ۰۰ تا ۵۹ باشد.\n{TIME_FORMAT_HINT}"
+    return time(hour, minute), None
 
 
 async def show(query: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
@@ -56,8 +67,9 @@ def query_message(query: CallbackQuery) -> Message:
     return query.message
 
 
-async def start_picker(state: FSMContext, min_date: date, max_date: date) -> None:
-    await state.update_data(cal_min=min_date.toordinal(), cal_max=max_date.toordinal())
+async def start_picker(state: FSMContext, min_date: date, max_date: date, back: str | None = None) -> None:
+    """Remember the picker's allowed range and its "previous step" button for page navigation."""
+    await state.update_data(cal_min=min_date.toordinal(), cal_max=max_date.toordinal(), picker_back=back)
 
 
 async def picker_range(state: FSMContext) -> tuple[date, date]:
@@ -89,7 +101,8 @@ def parse_typed_date(text: str) -> date | None:
 @router.callback_query(CalCb.filter(F.a == "m"))
 async def calendar_navigate(query: CallbackQuery, callback_data: CalCb, state: FSMContext) -> None:
     min_date, max_date = await picker_range(state)
-    page = day_page(callback_data.p, date.fromordinal(callback_data.v), min_date, max_date)
+    back = (await state.get_data()).get("picker_back")
+    page = day_page(callback_data.p, date.fromordinal(callback_data.v), min_date, max_date, back)
     await show(query, query_message(query).text or "📅 تاریخ را انتخاب کنید:", page)
 
 
@@ -97,6 +110,9 @@ async def calendar_navigate(query: CallbackQuery, callback_data: CalCb, state: F
 async def hour_selected(query: CallbackQuery, callback_data: TimeCb, state: FSMContext) -> None:
     if await state.get_state() is None:
         raise ExpiredActionError()
+    back = (await state.get_data()).get("time_back")
     await show(
-        query, query_message(query).text or "🕘 دقیقه را انتخاب کنید:", minute_picker(callback_data.p, callback_data.h)
+        query,
+        query_message(query).text or "🕘 دقیقه را انتخاب کنید:",
+        minute_picker(callback_data.p, callback_data.h, back),
     )

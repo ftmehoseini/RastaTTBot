@@ -11,6 +11,7 @@ from typing import Protocol
 
 from app.core.config.policy import AttendancePolicy
 from app.domain.attendance.models import DayStatus
+from app.domain.users.models import SCHEDULE_HOURLY
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class WorkSchedule:
     allowed_early_minutes: int
     overtime_rounding_minutes: int
     floating_until: time | None = None
+    hourly: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ class DailyCalculation:
     net_balance_minutes: int | None
     # Lateness inside the floating check-in window (تأخیر مجاز). late_minutes is the unauthorized part.
     floating_late_minutes: int = 0
+    # Hourly staff: only check-in, check-out and worked minutes apply
+    hourly: bool = False
 
 
 class CalculationPolicy(Protocol):
@@ -222,6 +226,42 @@ class FloatingWindowPolicy:
         return floating, late
 
 
+class HourlyPolicy:
+    """Hourly staff have no fixed hours: no lateness, early departure, overtime or deficit."""
+
+    name = "hourly"
+
+    def calculate(
+        self, schedule: WorkSchedule, check_in: datetime | None, check_out: datetime | None
+    ) -> DailyCalculation:
+        if check_in and check_out:
+            status = DayStatus.COMPLETE
+        elif check_in:
+            status = DayStatus.MISSING_CHECK_OUT
+        elif check_out:
+            status = DayStatus.MISSING_CHECK_IN
+        else:
+            status = DayStatus.NON_WORKDAY  # not coming in is not an absence for hourly staff
+        return DailyCalculation(
+            status=status,
+            check_in=check_in,
+            check_out=check_out,
+            gross_worked_minutes=_minutes_between(check_in, check_out) if check_in and check_out else None,
+            required_minutes=0,
+            late_minutes=0,
+            early_departure_minutes=0,
+            allowed_late_minutes=0,
+            allowed_early_minutes=0,
+            raw_balance_minutes=None,
+            overtime_minutes=0,
+            deficit_minutes=0,
+            net_balance_minutes=None,
+            hourly=True,
+        )
+
+
+HOURLY_POLICY = HourlyPolicy()
+
 CALCULATION_POLICIES: dict[str, CalculationPolicy] = {
     StandardDeductionPolicy.name: StandardDeductionPolicy(),
     FloatingWindowPolicy.name: FloatingWindowPolicy(),
@@ -250,7 +290,7 @@ class ScheduleResolver:
         return day.weekday() in self.policy.workday_numbers and day not in self.holidays
 
     def for_day(self, day: date, schedule_code: str | None = None) -> WorkSchedule:
-        workday = self.is_workday(day)
+        workday = self.is_workday(day) and schedule_code != SCHEDULE_HOURLY
         return WorkSchedule(
             code=schedule_code or "default",
             is_workday=workday,
@@ -261,4 +301,5 @@ class ScheduleResolver:
             allowed_early_minutes=self.policy.allowed_early_departure_minutes,
             overtime_rounding_minutes=self.policy.overtime_rounding_minutes,
             floating_until=self.policy.floating_check_in_until,
+            hourly=schedule_code == SCHEDULE_HOURLY,
         )
