@@ -18,7 +18,7 @@ Sub-menu: ثبت ورود · ثبت خروج · ثبت فراموشی ورود/�
 
 Every multi-step dialog (forgotten entry, leave request) has «✖️ لغو», which ends the dialog, and «🔙 مرحله قبل», which goes back one step and keeps the earlier answers.
 
-**Full-time and hourly staff.** By default a user is full-time and the organization rules apply (08:00–16:48, floating check-in until 09:30, unauthorized lateness, early departure, overtime and the monthly caps; see `floating_window` in CONFIGURATION.md). An admin with role management can switch a user to hourly on the user card («⏰ تبدیل به نیروی ساعتی», stored as `users.schedule_code = 'hourly'`). For hourly staff only check-in, check-out and worked time are recorded: no lateness, early departure, overtime, deficit or caps, days without a record are not absences, and they get no check-in reminder.
+**Full-time and hourly staff.** By default a user is full-time and the organization rules apply (08:00–16:48, floating check-in until 09:30, unauthorized lateness, early departure, overtime and the monthly caps; see `floating_window` in CONFIGURATION.md). An admin with role management can switch a user to hourly on the user card («⏰ تبدیل به نیروی ساعتی», stored as `users.schedule_code = 'hourly'`). For hourly staff only check-in, check-out and worked time are recorded: no lateness, early departure, overtime, deficit or caps and days without a record are not absences. They get the same check-in and check-out reminders as everyone else.
 
 **Check-in.** Show the Jalali date and Tehran time → confirm → save (`BOT_LIVE`, UTC). If today already has a check-in, the registered time is shown instead. If yesterday's shift is still open and within `max_shift_hours`, the user is asked to check out first.
 

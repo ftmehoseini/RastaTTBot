@@ -536,8 +536,7 @@ class AttendanceService:
         employees = await self.users.list_active_employees()
         checked_in = await self.records.user_ids_checked_in_on(day)
         on_leave = await self._on_daily_leave(day)
-        # Hourly staff don't come in every day, so they get no "you haven't checked in" reminder.
-        return [u for u in employees if u.id not in checked_in and u.id not in on_leave and not u.is_hourly]
+        return [u for u in employees if u.id not in checked_in and u.id not in on_leave]
 
     async def check_out_reminder_recipients(self, day: date) -> list[tuple[User, AttendanceRecord]]:
         open_records = await self.records.open_records_on(day)

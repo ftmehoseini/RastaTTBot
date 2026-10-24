@@ -258,4 +258,4 @@ async def test_hourly_staff_only_track_worked_time(services, make_user, clock) -
     assert month.hourly and (month.late_cap_minutes, month.early_cap_minutes) == (0, 0)
     full_time = await make_user("نیروی تمام‌وقت")
     recipients = await services.attendance.check_in_reminder_recipients(MONDAY)
-    assert full_time in recipients and hourly not in recipients
+    assert full_time in recipients and hourly in recipients  # hourly staff get the reminders too
