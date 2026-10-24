@@ -25,6 +25,7 @@ Handler = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
 GENERIC_ERROR = "⚠️ خطای غیرمنتظره‌ای رخ داد. لطفاً چند لحظه بعد دوباره تلاش کنید."
 ALERT_LIMIT = 190
+SLOW_UPDATE_MS = 1500
 
 
 def _from_user_id(update: Update) -> int | None:
@@ -85,6 +86,18 @@ class ContextMiddleware(BaseMiddleware):
         cid = new_correlation_id()
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(correlation_id=cid, update_id=event.update_id)
+        started = time.perf_counter()
+        try:
+            return await self._handle(handler, event, data)
+        finally:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if elapsed_ms >= SLOW_UPDATE_MS:
+                # Time spent inside the bot (DB + messenger API calls); find with: logs bot | grep "slow update"
+                log.warning(
+                    "slow update", elapsed_ms=elapsed_ms, kind="callback" if event.callback_query else "message"
+                )
+
+    async def _handle(self, handler: Handler, event: Update, data: dict[str, Any]) -> Any:
         async with self.session_factory() as session:
             services = Services(session, self.policy, self.time, self.messenger, self.bootstrap_ids)
             user = None
