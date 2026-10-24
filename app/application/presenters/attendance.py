@@ -63,7 +63,7 @@ def _day_line(row: DayRow) -> str:
     check_out = format_time(c.check_out) if c.check_out else "—"
     if c.check_in and c.check_out and c.check_out.date() != c.check_in.date():
         check_out += " (روز بعد)"
-    manual = " ✍️" if row.is_manual else ""
+    manual = (" ✍️" if row.is_manual_today else "") + (" 📝" if row.is_forgotten else "")
     lines = [f"{head}{manual}", f"   ورود {check_in} | خروج {check_out}"]
     if c.status == DayStatus.MISSING_CHECK_OUT and row.is_today:
         lines.append("   ⏳ امروز — در حال کار")
@@ -87,6 +87,15 @@ def _day_line(row: DayRow) -> str:
             f" | کسری {format_minutes(c.deficit_minutes)}"
         )
     return "\n".join(lines)
+
+
+def _legend(report: EmployeeReport) -> list[str]:
+    marks = []
+    if any(r.is_manual_today for r in report.rows):
+        marks.append("✍️ = ثبت دستی امروز")
+    if any(r.is_forgotten for r in report.rows):
+        marks.append("📝 = ثبت فراموشی")
+    return ["\n" + " | ".join(marks)] if marks else []
 
 
 def _with_cap(label: str, used: int, cap: int) -> str:
@@ -119,8 +128,7 @@ def employee_report(report: EmployeeReport, title: str = "گزارش هفتگی 
             f"روزهای حضور: {to_persian_digits(t.present_days)} | ناقص: {to_persian_digits(t.incomplete_days)}",
             f"کارکرد: {format_minutes(t.worked_minutes)}",
         ]
-        if any(r.is_manual for r in report.rows):
-            lines.append("\n✍️ = ثبت دستی (فراموشی)")
+        lines.extend(_legend(report))
         return "\n".join(lines)
     lines += [
         "— جمع —",
@@ -133,8 +141,7 @@ def employee_report(report: EmployeeReport, title: str = "گزارش هفتگی 
         f"اضافه‌کار: {format_minutes(t.overtime_minutes)} | کسری: {format_minutes(t.deficit_minutes)}",
         f"خالص: {format_minutes(t.net_balance_minutes, signed=True)}",
     ]
-    if any(r.is_manual for r in report.rows):
-        lines.append("\n✍️ = ثبت دستی (فراموشی)")
+    lines.extend(_legend(report))
     return "\n".join(lines)
 
 

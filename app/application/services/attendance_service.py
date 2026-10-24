@@ -270,12 +270,13 @@ class AttendanceService:
             )
         )
         if status == CorrectionStatus.APPLIED:
+            source = RecordSource.MANUAL_TODAY if data.same_day else RecordSource.MANUAL_CORRECTION
             if needs_in:
                 record.check_in_at = new_in
-                record.check_in_source = RecordSource.MANUAL_CORRECTION
+                record.check_in_source = source
             if needs_out:
                 record.check_out_at = new_out
-                record.check_out_source = RecordSource.MANUAL_CORRECTION
+                record.check_out_source = source
             record.updated_by = user.id
         await self.session.flush()
         self.audit.record(
@@ -308,6 +309,10 @@ class AttendanceService:
     async def _plan_correction(self, user: User, data: CorrectionInput, for_update: bool) -> _CorrectionPlan:
         """Validate a forgotten entry and work out the new check-in/out times (UTC)."""
         earliest, latest = self.correction_date_window()
+        if data.same_day:
+            # Today's manual time (yesterday too, for the check-out of a night shift)
+            latest = self.time.today()
+            earliest = latest - timedelta(days=1)
         if data.work_date > latest:
             raise ValidationError("این تاریخ هنوز نرسیده یا ثبت اصلاحیه برای آن مجاز نیست.")
         if data.work_date < earliest:

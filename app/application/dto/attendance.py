@@ -31,6 +31,8 @@ class CorrectionInput:
     check_in_time: time | None = None
     check_out_time: time | None = None
     reason: str | None = None
+    # True for today's manual time from the check-in/out buttons; False for a forgotten entry
+    same_day: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,8 +59,17 @@ class DayRow:
 
     @property
     def is_manual(self) -> bool:
-        manual = {RecordSource.MANUAL_CORRECTION, RecordSource.ADMIN_EDIT}
-        return self.check_in_source in manual or self.check_out_source in manual
+        """Any time not taken automatically (forgotten entry, today's manual time, admin edit)."""
+        return self.is_forgotten or self.is_manual_today
+
+    @property
+    def is_forgotten(self) -> bool:
+        forgotten = {RecordSource.MANUAL_CORRECTION, RecordSource.ADMIN_EDIT}
+        return self.check_in_source in forgotten or self.check_out_source in forgotten
+
+    @property
+    def is_manual_today(self) -> bool:
+        return RecordSource.MANUAL_TODAY in (self.check_in_source, self.check_out_source)
 
 
 @dataclass(frozen=True)

@@ -40,7 +40,8 @@ attendance:
   allow_checkout_without_checkin: false
   # How long a live check-in/out confirmation button stays valid
   live_confirmation_ttl_seconds: 300
-  allow_same_day_manual_correction: true
+  # Forgotten entries are for earlier days; today's time is entered with ثبت ورود/خروج امروز → دستی
+  allow_same_day_manual_correction: false
   allow_future_manual_correction: false
   max_manual_correction_age_days: 30
   manual_correction_requires_approval: false

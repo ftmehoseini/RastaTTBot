@@ -17,7 +17,8 @@ from app.core.database import (
 
 class RecordSource(StrEnum):
     BOT_LIVE = "BOT_LIVE"
-    MANUAL_CORRECTION = "MANUAL_CORRECTION"
+    MANUAL_CORRECTION = "MANUAL_CORRECTION"  # forgotten entry for an earlier day (📝)
+    MANUAL_TODAY = "MANUAL_TODAY"  # today's time typed instead of the automatic one (✍️)
     ADMIN_EDIT = "ADMIN_EDIT"
     LEGACY_IMPORT = "LEGACY_IMPORT"
 

@@ -134,7 +134,8 @@ async def check_out_confirm(query: CallbackQuery, callback_data: AttCb, services
 
 @router.callback_query(AttCb.filter(F.a.in_({"in_man", "out_man"})))
 async def punch_manual(query: CallbackQuery, callback_data: AttCb, state: FSMContext) -> None:
-    """Manual time for today: the same typed-time step as a forgotten entry, saved as ✍️."""
+    """Manual time for today: the same typed-time step as a forgotten entry, but saved as today's
+    manual time (✍️), not as a forgotten entry (📝)."""
     if not callback_data.d:
         raise ExpiredActionError()
     await state.clear()
@@ -320,6 +321,7 @@ def _correction_input(data: dict) -> CorrectionInput:
             work_date=date.fromordinal(data["day"]),
             check_in_time=to_time(data.get("in_time")),
             check_out_time=to_time(data.get("out_time")),
+            same_day=data.get("origin") == "today",
         )
     except KeyError:
         raise ExpiredActionError() from None
@@ -340,7 +342,7 @@ async def correction_confirm(query: CallbackQuery, state: FSMContext, services: 
     if result.status == CorrectionStatus.PENDING_APPROVAL:
         text = "📨 ثبت فراموشی شما ذخیره شد و پس از تأیید مدیر اعمال می‌شود."
     else:
-        text = "✅ ثبت فراموشی انجام شد و در گزارش‌ها با علامت ✍️ نمایش داده می‌شود."
+        text = "✅ ثبت فراموشی انجام شد و در گزارش‌ها با علامت 📝 نمایش داده می‌شود."
     await show(query, text, back_to_menu())
 
 

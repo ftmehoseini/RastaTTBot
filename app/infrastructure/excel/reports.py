@@ -30,6 +30,7 @@ DAY_STATUS_FA = {
 SOURCE_FA = {
     RecordSource.BOT_LIVE: "ربات (لحظه‌ای)",
     RecordSource.MANUAL_CORRECTION: "ثبت فراموشی",
+    RecordSource.MANUAL_TODAY: "ثبت دستی امروز",
     RecordSource.ADMIN_EDIT: "ویرایش ادمین",
     RecordSource.LEGACY_IMPORT: "ربات قبلی",
 }

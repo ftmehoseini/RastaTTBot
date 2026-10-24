@@ -271,23 +271,38 @@ async def test_forgotten_entry_flow_date_first_with_typed_time(bot: Harness, clo
     assert "۰۸:۴۰" in bot.last_text(EMP) and "۱۷:۱۵" in bot.last_text(EMP)
 
 
-async def test_forgotten_entry_rejects_future_time_and_check_out_without_check_in(bot: Harness, clock) -> None:
+async def test_forgotten_entry_is_for_earlier_days_and_marked_differently(bot: Harness, clock) -> None:
     await bot.register(EMP, "مریم کریمی")
     clock.set(tehran(2026, 10, 19, 12, 0))
     await bot.press(EMP, AttCb(a="forgot").pack())
-    await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 19).toordinal()).pack())
-    await bot.press(EMP, "cor:kind:in")
-    await bot.text(EMP, "13:00")  # later than now
-    assert "آینده" in bot.last_text(EMP)
-    await bot.press(EMP, CorrCb(a="back", k="kind").pack())
+    # Today is not offered for a forgotten entry; typing it is refused too.
+    assert CalCb(p="corr", a="d", v=date(2026, 10, 19).toordinal()).pack() not in bot.buttons(EMP)
+    await bot.text(EMP, "۱۴۰۵/۰۷/۲۷")
+    assert "قابل انتخاب نیست" in bot.last_text(EMP)
+    await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 18).toordinal()).pack())
     await bot.press(EMP, "cor:kind:out")
-    await bot.text(EMP, "11:00")
-    assert "اول «ورود»" in bot.last_text(EMP)
+    await bot.text(EMP, "17:00")
+    assert "اول «ورود»" in bot.last_text(EMP)  # no check-in on that day
     await bot.press(EMP, CorrCb(a="back", k="kind").pack())
+    await bot.press(EMP, "cor:kind:in")
+    await bot.text(EMP, "08:10")
+    await bot.press(EMP, CorrCb(a="ok").pack())
+    assert "📝" in bot.last_text(EMP)
+    await bot.press(EMP, AttCb(a="forgot").pack())
     await bot.press(EMP, CorrCb(a="back", k="date").pack())  # back to the date step
     assert any(b.startswith("cal:corr:d:") for b in bot.buttons(EMP))
     await bot.press(EMP, NavCb(to="att").pack())  # back from the first step: attendance menu
     assert "ورود و خروج" in bot.last_text(EMP)
+
+    # Today's manual check-in is marked ✍️, the forgotten one of yesterday 📝.
+    await bot.press(EMP, AttCb(a="in").pack())
+    await bot.press(EMP, AttCb(a="in_man", d=date(2026, 10, 19).toordinal()).pack())
+    await bot.text(EMP, "11:30")
+    await bot.press(EMP, CorrCb(a="ok").pack())
+    await bot.press(EMP, AttCb(a="week").pack())
+    week = bot.last_text(EMP)
+    assert "یکشنبه ۲۶ مهر ۱۴۰۵ 📝" in week and "دوشنبه ۲۷ مهر ۱۴۰۵ ✍️" in week
+    assert "✍️ = ثبت دستی امروز | 📝 = ثبت فراموشی" in week
 
 
 async def test_leave_wizard_previous_step(bot: Harness, clock) -> None:

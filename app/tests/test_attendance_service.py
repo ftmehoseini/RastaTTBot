@@ -171,18 +171,23 @@ async def test_correction_conflicts_with_existing_values(services, make_user, cl
     clock.set(tehran(2026, 10, 19, 9, 40))
     await punch_in(services, user, clock)
     clock.set(tehran(2026, 10, 19, 10, 0))
+    # A forgotten entry is for earlier days; today's time goes through the manual (same-day) path.
+    with pytest.raises(ValidationError):
+        await services.attendance.submit_correction(
+            user, CorrectionInput(CorrectionType.CHECK_IN, MONDAY, check_in_time=time(8, 15))
+        )
     # Moving today's live check-in later is a conflict; moving it earlier fixes a late button press.
     with pytest.raises(ConflictError):
         await services.attendance.submit_correction(
-            user, CorrectionInput(CorrectionType.CHECK_IN, MONDAY, check_in_time=time(9, 50))
+            user, CorrectionInput(CorrectionType.CHECK_IN, MONDAY, check_in_time=time(9, 50), same_day=True)
         )
     result = await services.attendance.submit_correction(
-        user, CorrectionInput(CorrectionType.CHECK_IN, MONDAY, check_in_time=time(8, 15))
+        user, CorrectionInput(CorrectionType.CHECK_IN, MONDAY, check_in_time=time(8, 15), same_day=True)
     )
-    assert result.record.check_in_source == RecordSource.MANUAL_CORRECTION
+    assert result.record.check_in_source == RecordSource.MANUAL_TODAY
     with pytest.raises(ConflictError):
         await services.attendance.submit_correction(
-            user, CorrectionInput(CorrectionType.BOTH, MONDAY, time(8, 0), time(9, 0))
+            user, CorrectionInput(CorrectionType.BOTH, MONDAY, time(8, 0), time(9, 0), same_day=True)
         )
 
 

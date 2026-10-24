@@ -72,7 +72,7 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 | `max_shift_hours` | `16` | Longest allowed shift; a check-out after midnight belongs to the previous day within this limit |
 | `allow_checkout_without_checkin` | `false` | Allow check-out on a day without check-in |
 | `live_confirmation_ttl_seconds` | `300` | How long a check-in/out confirm button stays valid |
-| `allow_same_day_manual_correction` | `true` | Forgotten entries for today allowed |
+| `allow_same_day_manual_correction` | `false` | Forgotten entries for today allowed. Off: today's time is entered with «ثبت ورود/خروج امروز → دستی» and marked ✍️ instead of 📝 |
 | `allow_future_manual_correction` | `false` | Forgotten entries for future times allowed |
 | `max_manual_correction_age_days` | `30` | Oldest day a forgotten entry can be submitted for |
 | `manual_correction_requires_approval` | `false` | Store corrections as PENDING_APPROVAL instead of applying them |

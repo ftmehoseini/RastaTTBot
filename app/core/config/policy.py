@@ -66,7 +66,7 @@ class AttendancePolicy(BaseModel):
     max_shift_hours: int = Field(default=16, ge=1, le=24)
     allow_checkout_without_checkin: bool = False
     live_confirmation_ttl_seconds: int = Field(default=300, ge=10)
-    allow_same_day_manual_correction: bool = True
+    allow_same_day_manual_correction: bool = False
     allow_future_manual_correction: bool = False
     max_manual_correction_age_days: int = Field(default=30, ge=0)
     manual_correction_requires_approval: bool = False
