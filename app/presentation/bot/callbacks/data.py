@@ -14,14 +14,14 @@ class NavCb(CallbackData, prefix="nav"):
 
 
 class AttCb(CallbackData, prefix="att"):
-    a: str  # in | out | in_ok | out_ok | status | week | week_xls | month | month_xls | forgot
+    a: str  # in | out | in_ok | out_ok | in_man | out_man | week | week_xls | month | month_xls | forgot
     ts: int = 0  # UTC epoch seconds of the previewed time
     d: int = 0  # work date ordinal (check-out of a night shift)
 
 
 class CorrCb(CallbackData, prefix="cor"):
     a: str  # kind | back | ok
-    k: str = ""  # kind: in | out; back: the step to return to (date | kind | time)
+    k: str = ""  # kind: in | out; back: the step to return to (date | kind | time | punch)
 
 
 class CalCb(CallbackData, prefix="cal"):

@@ -53,6 +53,7 @@ class DayRow:
     calculation: DailyCalculation
     is_workday: bool
     correction_notes: list[str] = field(default_factory=list)
+    is_today: bool = False
 
     @property
     def is_manual(self) -> bool:

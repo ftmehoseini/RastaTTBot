@@ -141,3 +141,14 @@ async def test_attendance_excel_has_rtl_header_and_filter(services, make_user, c
     assert sheet.freeze_panes == "A2"
     assert sheet["A1"].value == "نام کارمند" and sheet["A1"].font.bold
     assert sheet.max_row == 1 + len(report.rows)
+
+
+def test_main_menu_puts_attendance_on_the_right() -> None:
+    from app.domain.users.models import Role, User, UserRole
+    from app.presentation.bot.modules import BTN_ATTENDANCE, BTN_LEAVE, main_menu
+
+    user = User(full_name="مریم کریمی", is_active=True)
+    user.role_links = [UserRole(role=Role(code=RoleCode.EMPLOYEE, title="کارمند"))]
+    first_row = [b.text for b in main_menu(user).keyboard[0]]
+    # Soroush draws rows left to right, so the last button of the row is the one on the right.
+    assert first_row == [BTN_LEAVE, BTN_ATTENDANCE]

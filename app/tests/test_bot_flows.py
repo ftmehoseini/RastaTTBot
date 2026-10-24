@@ -162,8 +162,11 @@ async def test_check_in_and_out_through_buttons(bot: Harness, clock) -> None:
     clock.set(tehran(2026, 10, 19, 9, 3))
     await bot.text(EMP, "⏱ ورود و خروج")
     assert AttCb(a="in").pack() in bot.buttons(EMP)
+    assert "att:status" not in bot.buttons(EMP)  # «وضعیت امروز» was removed
     await bot.press(EMP, AttCb(a="in").pack())
-    assert "آیا ورود" in bot.last_text(EMP)
+    assert "ثبت ورود امروز" in bot.last_text(EMP) and "چطور ثبت شود" in bot.last_text(EMP)
+    # Two choices: automatic (now) and manual; دستی is listed last so Soroush shows it on the right.
+    assert bot.buttons(EMP)[1] == AttCb(a="in_man", d=date(2026, 10, 19).toordinal()).pack()
     confirm = next(b for b in bot.buttons(EMP) if b.startswith("att:in_ok"))
     await bot.press(EMP, confirm)
     assert "ورود شما ثبت شد" in bot.last_text(EMP)
@@ -175,12 +178,11 @@ async def test_check_in_and_out_through_buttons(bot: Harness, clock) -> None:
     confirm = next(b for b in bot.buttons(EMP) if b.startswith("att:out_ok"))
     await bot.press(EMP, confirm)
     assert "خروج شما ثبت شد" in bot.last_text(EMP)
-    await bot.press(EMP, AttCb(a="status").pack())
-    status = bot.last_text(EMP)
-    for label in ("ورود", "خروج", "تعجیل", "تأخیر مجاز", "تأخیر غیرمجاز", "اضافه‌کار"):
-        assert label in status
     await bot.press(EMP, AttCb(a="week").pack())
-    assert "گزارش هفتگی من" in bot.last_text(EMP)
+    week = bot.last_text(EMP)  # today is in the weekly report
+    assert "گزارش هفتگی من" in week
+    for label in ("ورود", "خروج", "تعجیل", "تأخیر مجاز", "غیرمجاز", "اضافه‌کار"):
+        assert label in week
     await bot.press(EMP, AttCb(a="week_xls").pack())
     assert bot.documents(EMP)
     await bot.press(EMP, AttCb(a="month").pack())
@@ -188,6 +190,34 @@ async def test_check_in_and_out_through_buttons(bot: Harness, clock) -> None:
     assert "گزارش ماهانه من" in month and "از سقف" in month and "مانده" in month
     await bot.press(EMP, AttCb(a="month_xls").pack())
     assert len(bot.documents(EMP)) == 2
+
+
+async def test_today_manual_check_in_and_out(bot: Harness, clock) -> None:
+    await bot.register(EMP, "مریم کریمی")
+    clock.set(tehran(2026, 10, 19, 9, 50))
+    await bot.press(EMP, AttCb(a="in").pack())
+    await bot.press(EMP, AttCb(a="in_man", d=date(2026, 10, 19).toordinal()).pack())
+    assert "ساعت ورود امروز" in bot.last_text(EMP)
+    await bot.text(EMP, "10:30")  # later than now
+    assert "آینده" in bot.last_text(EMP)
+    await bot.press(EMP, CorrCb(a="back", k="punch").pack())  # back to automatic/manual
+    assert "چطور ثبت شود" in bot.last_text(EMP)
+    await bot.press(EMP, AttCb(a="in_man", d=date(2026, 10, 19).toordinal()).pack())
+    await bot.text(EMP, "09:40")
+    assert "مرور ثبت دستی" in bot.last_text(EMP)
+    await bot.press(EMP, CorrCb(a="ok").pack())
+    saved = bot.last_text(EMP)
+    assert "ورود شما ثبت شد" in saved and "۰۹:۴۰" in saved and "ثبت دستی" in saved
+    assert "تأخیر غیرمجاز: ۰:۱۰" in saved
+
+    clock.set(tehran(2026, 10, 19, 17, 0))
+    await bot.press(EMP, AttCb(a="out").pack())
+    await bot.press(EMP, AttCb(a="out_man", d=date(2026, 10, 19).toordinal()).pack())
+    await bot.text(EMP, "16:30")
+    await bot.press(EMP, CorrCb(a="ok").pack())
+    assert "خروج شما ثبت شد" in bot.last_text(EMP) and "تعجیل: ۰:۱۸" in bot.last_text(EMP)
+    await bot.press(EMP, AttCb(a="out").pack())  # already registered
+    assert "قبلاً" in bot.last_text(EMP)
 
 
 async def test_forgotten_entry_flow_date_first_with_typed_time(bot: Harness, clock) -> None:
@@ -425,9 +455,9 @@ async def test_admin_switches_employee_to_hourly(bot: Harness, clock) -> None:
     clock.set(tehran(2026, 10, 19, 13, 0))
     await bot.press(EMP, AttCb(a="out").pack())
     await bot.press(EMP, next(b for b in bot.buttons(EMP) if b.startswith("att:out_ok")))
-    await bot.press(EMP, AttCb(a="status").pack())
-    status = bot.last_text(EMP)
-    assert "کارکرد: ۲:۴۵" in status and "تأخیر" not in status and "اضافه‌کار" not in status
+    await bot.press(EMP, AttCb(a="week").pack())
+    week = bot.last_text(EMP)
+    assert "کارکرد ۲:۴۵" in week and "تأخیر" not in week and "اضافه‌کار" not in week
     await bot.press(EMP, AttCb(a="month").pack())
     month = bot.last_text(EMP)
     assert "نیروی ساعتی" in month and "سقف" not in month and "تعجیل" not in month

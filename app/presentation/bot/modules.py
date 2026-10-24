@@ -37,14 +37,15 @@ MENU_ENTRIES: list[MenuEntry] = [
 
 def main_menu(user: User) -> ReplyKeyboardMarkup:
     labels = [e.label for e in sorted(MENU_ENTRIES, key=lambda e: e.order) if e.visible(user)]
-    rows = [labels[i : i + 2] for i in range(0, len(labels), 2)]
+    # Soroush draws rows left to right, so each pair is reversed: «ورود و خروج» on the right, «مرخصی» left.
+    rows = [labels[i : i + 2][::-1] for i in range(0, len(labels), 2)]
     rows.append([BTN_HELP])
     return reply_menu(rows)
 
 
 HELP_TEXT = (
     "راهنمای ربات\n\n"
-    f"{BTN_ATTENDANCE}: ثبت ورود و خروج، ثبت فراموشی، وضعیت امروز و گزارش هفتگی\n"
+    f"{BTN_ATTENDANCE}: ثبت ورود و خروج امروز (اتوماتیک یا دستی)، ثبت فراموشی، گزارش هفتگی و ماهانه\n"
     f"{BTN_LEAVE}: درخواست مرخصی ساعتی یا روزانه و پیگیری وضعیت آن\n"
     f"{BTN_FOOD}: دیدن منوی هفته، سفارش غذا و مهمان، صورت‌حساب\n\n"
     "دستورها:\n"

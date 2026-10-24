@@ -5,13 +5,14 @@ from datetime import UTC, date, datetime, time
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.application.dto.attendance import CorrectionInput
 from app.application.presenters import attendance as texts
 from app.application.services.container import Services
 from app.core.exceptions import ConflictError, ExpiredActionError, ValidationError
 from app.core.utils.jalali import format_date
+from app.core.utils.text import to_persian_digits
 from app.domain.attendance.models import CorrectionStatus, CorrectionType
 from app.domain.users.models import User
 from app.infrastructure.excel.reports import build_attendance_workbook, report_filename
@@ -45,13 +46,12 @@ def menu_markup():
     return inline(
         [
             # Soroush draws rows left to right: listing خروج first puts ورود on the right.
-            [button("🏁 ثبت خروج", AttCb(a="out").pack()), button("✅ ثبت ورود", AttCb(a="in").pack())],
+            [button("🏁 ثبت خروج امروز", AttCb(a="out").pack()), button("✅ ثبت ورود امروز", AttCb(a="in").pack())],
             [button("📝 ثبت فراموشی ورود/خروج", AttCb(a="forgot").pack())],
             [
                 button("📊 گزارش هفتگی من", AttCb(a="week").pack()),
                 button("📅 گزارش ماهانه من", AttCb(a="month").pack()),
             ],
-            [button("📋 وضعیت امروز", AttCb(a="status").pack())],
             back_row(),
         ]
     )
@@ -74,7 +74,20 @@ async def open_menu_from_button(query: CallbackQuery, state: FSMContext) -> None
     await show(query, MENU_TEXT, menu_markup())
 
 
-# --- live check-in / check-out --------------------------------------------------------------
+# --- today's check-in / check-out: automatic (now) or manual (typed time) -----------------------
+
+
+def _punch_choice(auto_data: str, manual_data: str, at_local: datetime) -> InlineKeyboardMarkup:
+    return inline(
+        [
+            # Soroush draws rows left to right: «دستی» ends up on the right.
+            [
+                button(f"⏱ اتوماتیک ({to_persian_digits(at_local.strftime('%H:%M'))})", auto_data),
+                button("✍️ دستی", manual_data),
+            ],
+            back_row("att"),
+        ]
+    )
 
 
 @router.callback_query(AttCb.filter(F.a == "in"))
@@ -84,8 +97,9 @@ async def check_in_preview(query: CallbackQuery, services: Services, user: User)
         at = services.time.to_local(preview.existing.check_in_at)
         await show(query, texts.already_registered("in", at), back_to_menu())
         return
-    data = AttCb(a="in_ok", ts=int(preview.at_utc.timestamp())).pack()
-    await show(query, texts.punch_preview(preview), inline(confirm_rows(data)))
+    auto = AttCb(a="in_ok", ts=int(preview.at_utc.timestamp())).pack()
+    manual = AttCb(a="in_man", d=preview.work_date.toordinal()).pack()
+    await show(query, texts.punch_preview(preview), _punch_choice(auto, manual, preview.at_local))
 
 
 @router.callback_query(AttCb.filter(F.a == "in_ok"))
@@ -103,8 +117,9 @@ async def check_out_preview(query: CallbackQuery, services: Services, user: User
         at = services.time.to_local(preview.existing.check_out_at)
         await show(query, texts.already_registered("out", at), back_to_menu())
         return
-    data = AttCb(a="out_ok", ts=int(preview.at_utc.timestamp()), d=preview.work_date.toordinal()).pack()
-    await show(query, texts.punch_preview(preview), inline(confirm_rows(data)))
+    auto = AttCb(a="out_ok", ts=int(preview.at_utc.timestamp()), d=preview.work_date.toordinal()).pack()
+    manual = AttCb(a="out_man", d=preview.work_date.toordinal()).pack()
+    await show(query, texts.punch_preview(preview), _punch_choice(auto, manual, preview.at_local))
 
 
 @router.callback_query(AttCb.filter(F.a == "out_ok"))
@@ -117,20 +132,18 @@ async def check_out_confirm(query: CallbackQuery, callback_data: AttCb, services
     await show(query, text, back_to_menu())
 
 
-# --- status, weekly and monthly report ------------------------------------------------------------------
+@router.callback_query(AttCb.filter(F.a.in_({"in_man", "out_man"})))
+async def punch_manual(query: CallbackQuery, callback_data: AttCb, state: FSMContext) -> None:
+    """Manual time for today: the same typed-time step as a forgotten entry, saved as ✍️."""
+    if not callback_data.d:
+        raise ExpiredActionError()
+    await state.clear()
+    kind = "in" if callback_data.a == "in_man" else "out"
+    await state.update_data(day=callback_data.d, kind=kind, origin="today")
+    await _ask_time(query, state)
 
 
-@router.callback_query(AttCb.filter(F.a == "status"))
-async def today_status(query: CallbackQuery, services: Services, user: User) -> None:
-    today = services.time.today()
-    record = await services.attendance.record_for(user, today)
-    day = today
-    if record is None or record.check_in_at is None:
-        night = await services.attendance.open_night_shift(user)
-        if night is not None:
-            record, day = night, night.work_date
-    calc = services.attendance.calculate(user, day, record)
-    await show(query, texts.today_status(day, calc), back_to_menu())
+# --- weekly and monthly report ------------------------------------------------------------------
 
 
 @router.callback_query(AttCb.filter(F.a == "week"))
@@ -231,20 +244,27 @@ async def correction_kind(query: CallbackQuery, callback_data: CorrCb, state: FS
     await _ask_time(query, state)
 
 
+def _time_back(data: dict) -> InlineKeyboardMarkup:
+    # Manual time for today goes back to the automatic/manual choice, a forgotten entry to ورود/خروج.
+    step = "punch" if data.get("origin") == "today" else "kind"
+    return inline([step_row(CorrCb(a="back", k=step).pack())])
+
+
 async def _ask_time(target: CallbackQuery | Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.set_state(Correction.typing_time)
     day = date.fromordinal(data["day"])
+    which = "امروز" if data.get("origin") == "today" else "روز"
     await reply(
         target,
-        f"🕘 ساعت {_kind_label(data['kind'])} روز {format_date(day)} را بنویسید.\n{TIME_FORMAT_HINT}",
-        inline([step_row(CorrCb(a="back", k="kind").pack())]),
+        f"🕘 ساعت {_kind_label(data['kind'])} {which} ({format_date(day)}) را بنویسید.\n{TIME_FORMAT_HINT}",
+        _time_back(data),
     )
 
 
 @router.message(StateFilter(Correction.typing_time), F.text)
 async def correction_time_typed(message: Message, state: FSMContext, services: Services, user: User) -> None:
-    back = inline([step_row(CorrCb(a="back", k="kind").pack())])
+    back = _time_back(await state.get_data())
     value, problem = check_hhmm(message.text or "")
     if problem:
         await message.answer(problem, reply_markup=back)
@@ -260,16 +280,27 @@ async def correction_time_typed(message: Message, state: FSMContext, services: S
     await state.update_data({"in_time": None, "out_time": None, f"{data['kind']}_time": value.strftime("%H:%M")})
     await state.set_state(Correction.confirming)
     data = await state.get_data()
-    text = texts.correction_review(KIND_BY_CODE[data["kind"]], draft.work_date, data["in_time"], data["out_time"])
+    title = "مرور ثبت دستی" if data.get("origin") == "today" else "مرور ثبت فراموشی"
+    text = texts.correction_review(
+        KIND_BY_CODE[data["kind"]], draft.work_date, data["in_time"], data["out_time"], title=title
+    )
     await message.answer(
         text, reply_markup=inline(confirm_rows(CorrCb(a="ok").pack(), CorrCb(a="back", k="time").pack()))
     )
 
 
 @router.callback_query(StateFilter(Correction), CorrCb.filter(F.a == "back"))
-async def correction_back(query: CallbackQuery, callback_data: CorrCb, state: FSMContext, services: Services) -> None:
+async def correction_back(
+    query: CallbackQuery, callback_data: CorrCb, state: FSMContext, services: Services, user: User
+) -> None:
     data = await state.get_data()
-    if callback_data.k == "date":
+    if callback_data.k == "punch" and "kind" in data:
+        await state.clear()
+        if data["kind"] == "in":
+            await check_in_preview(query, services, user)
+        else:
+            await check_out_preview(query, services, user)
+    elif callback_data.k == "date":
         await _ask_date(query, state, services)
     elif callback_data.k == "kind" and "day" in data:
         await _ask_kind(query, state, date.fromordinal(data["day"]))
@@ -296,9 +327,16 @@ def _correction_input(data: dict) -> CorrectionInput:
 
 @router.callback_query(StateFilter(Correction.confirming), CorrCb.filter(F.a == "ok"))
 async def correction_confirm(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
-    draft = _correction_input(await state.get_data())
+    data = await state.get_data()
+    draft = _correction_input(data)
     await state.clear()
     result = await services.attendance.submit_correction(user, draft)
+    if data.get("origin") == "today" and result.status == CorrectionStatus.APPLIED:
+        kind = data["kind"]
+        at = result.check_in_local if kind == "in" else result.check_out_local
+        calc = services.attendance.calculate(user, draft.work_date, result.record)
+        await show(query, f"{texts.punch_saved(kind, at, calc)}\n✍️ ثبت دستی", back_to_menu())
+        return
     if result.status == CorrectionStatus.PENDING_APPROVAL:
         text = "📨 ثبت فراموشی شما ذخیره شد و پس از تأیید مدیر اعمال می‌شود."
     else:

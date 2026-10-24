@@ -509,6 +509,7 @@ class AttendanceService:
                     calculation=calc,
                     is_workday=is_workday,
                     correction_notes=notes.get(day, []),
+                    is_today=day == today,
                 )
             )
         report = EmployeeReport(

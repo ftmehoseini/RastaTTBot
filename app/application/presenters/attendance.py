@@ -18,13 +18,13 @@ CORRECTION_TYPE_FA = {
 def punch_preview(preview: PunchPreview) -> str:
     action = "ورود" if preview.kind == "in" else "خروج"
     lines = [
-        f"⏱ ثبت {action}",
+        f"⏱ ثبت {action} امروز",
         f"📅 تاریخ: {format_date(preview.at_local.date())}",
-        f"🕘 ساعت: {format_time(preview.at_local)}",
+        f"🕘 ساعت الان: {format_time(preview.at_local)}",
     ]
     if preview.kind == "out" and preview.work_date != preview.at_local.date():
         lines.append(f"(خروج شیفت روز {format_date(preview.work_date)})")
-    lines.append(f"\nآیا {action} با همین زمان ثبت شود؟")
+    lines.append(f"\nزمان {action} چطور ثبت شود؟\n⏱ اتوماتیک: همین ساعت الان\n✍️ دستی: ساعت را خودتان بنویسید")
     return "\n".join(lines)
 
 
@@ -54,31 +54,6 @@ def punch_saved(kind: str, at_local: datetime, calc: DailyCalculation | None) ->
     return text
 
 
-def today_status(day: date, calc: DailyCalculation) -> str:
-    lines = [f"📋 وضعیت امروز — {format_date(day)}"]
-    lines.append(f"ورود: {format_time(calc.check_in) if calc.check_in else 'ثبت نشده'}")
-    lines.append(f"خروج: {format_time(calc.check_out) if calc.check_out else 'ثبت نشده'}")
-    if calc.hourly:
-        if calc.gross_worked_minutes is not None:
-            lines.append(f"کارکرد: {format_minutes(calc.gross_worked_minutes)}")
-        elif calc.check_in:
-            lines.append("⏳ در حال کار")
-        return "\n".join(lines)
-    if calc.check_out:
-        lines.append(f"تعجیل: {format_minutes(calc.early_departure_minutes)}")
-    if calc.check_in:
-        lines.append(f"تأخیر مجاز: {format_minutes(calc.floating_late_minutes)}")
-        lines.append(f"تأخیر غیرمجاز: {format_minutes(calc.late_minutes)}")
-    if calc.gross_worked_minutes is not None:
-        lines.append(f"اضافه‌کار: {format_minutes(calc.overtime_minutes)}")
-        lines.append(f"کارکرد: {format_minutes(calc.gross_worked_minutes)}")
-        lines.append(f"کسری: {format_minutes(calc.deficit_minutes)}")
-        lines.append(f"خالص: {format_minutes(calc.net_balance_minutes, signed=True)}")
-    elif calc.check_in and calc.check_in.tzinfo:
-        lines.append("⏳ در حال کار")
-    return "\n".join(lines)
-
-
 def _day_line(row: DayRow) -> str:
     c = row.calculation
     head = f"▫️ {format_date(row.work_date)}"
@@ -90,7 +65,13 @@ def _day_line(row: DayRow) -> str:
         check_out += " (روز بعد)"
     manual = " ✍️" if row.is_manual else ""
     lines = [f"{head}{manual}", f"   ورود {check_in} | خروج {check_out}"]
-    if c.status == DayStatus.MISSING_CHECK_OUT:
+    if c.status == DayStatus.MISSING_CHECK_OUT and row.is_today:
+        lines.append("   ⏳ امروز — در حال کار")
+        if not c.hourly:
+            lines.append(
+                f"   تأخیر مجاز {format_minutes(c.floating_late_minutes)} | غیرمجاز {format_minutes(c.late_minutes)}"
+            )
+    elif c.status == DayStatus.MISSING_CHECK_OUT:
         lines.append("   ⚠️ خروج ثبت نشده")
     elif c.status == DayStatus.MISSING_CHECK_IN:
         lines.append("   ⚠️ ورود ثبت نشده")
@@ -181,8 +162,10 @@ def team_summary(summary: TeamSummary, title: str) -> str:
     )
 
 
-def correction_review(kind: CorrectionType, day: date, check_in: str | None, check_out: str | None) -> str:
-    lines = ["📝 مرور ثبت فراموشی", f"نوع: {CORRECTION_TYPE_FA[kind]}", f"تاریخ: {format_date(day)}"]
+def correction_review(
+    kind: CorrectionType, day: date, check_in: str | None, check_out: str | None, title: str = "مرور ثبت فراموشی"
+) -> str:
+    lines = [f"📝 {title}", f"نوع: {CORRECTION_TYPE_FA[kind]}", f"تاریخ: {format_date(day)}"]
     if check_in:
         lines.append(f"ساعت ورود: {to_persian_digits(check_in)}")
     if check_out:
