@@ -61,8 +61,9 @@ ATTENDANCE_COLUMNS = [
     Column("خروج", 8),
     Column("کارکرد", 9),
     Column("موظفی", 9),
-    Column("تأخیر (دقیقه)", 11),
     Column("تعجیل (دقیقه)", 11),
+    Column("تأخیر مجاز (دقیقه)", 13),
+    Column("تأخیر غیرمجاز (دقیقه)", 14),
     Column("اضافه‌کار", 10),
     Column("کسری", 9),
     Column("خالص", 9),
@@ -71,6 +72,11 @@ ATTENDANCE_COLUMNS = [
     Column("منبع خروج", 14),
     Column("اصلاحیه‌ها", 40),
 ]
+
+
+def _over_cap(used: int, cap: int) -> int | str:
+    """Minutes over a monthly cap; empty when the report has no cap (not a whole month)."""
+    return max(0, used - cap) if cap else ""
 
 
 def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
@@ -93,8 +99,9 @@ def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
                     check_out,
                     minutes_cell(c.gross_worked_minutes),
                     minutes_cell(c.required_minutes),
-                    c.late_minutes,
                     c.early_departure_minutes,
+                    c.floating_late_minutes,
+                    c.late_minutes,
                     minutes_cell(c.overtime_minutes),
                     minutes_cell(c.deficit_minutes),
                     minutes_cell(c.net_balance_minutes),
@@ -113,8 +120,11 @@ def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
         Column("غیبت", 8),
         Column("کارکرد", 10),
         Column("موظفی", 10),
-        Column("تأخیر (دقیقه)", 11),
         Column("تعجیل (دقیقه)", 11),
+        Column("مازاد سقف تعجیل (دقیقه)", 15),
+        Column("تأخیر مجاز (دقیقه)", 13),
+        Column("تأخیر غیرمجاز (دقیقه)", 14),
+        Column("مازاد سقف تأخیر (دقیقه)", 15),
         Column("اضافه‌کار", 10),
         Column("کسری", 10),
         Column("خالص", 10),
@@ -127,8 +137,11 @@ def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
             r.totals.absent_days,
             minutes_cell(r.totals.worked_minutes),
             minutes_cell(r.totals.required_minutes),
-            r.totals.late_minutes,
             r.totals.early_departure_minutes,
+            _over_cap(r.totals.early_departure_minutes, r.early_cap_minutes),
+            r.totals.floating_late_minutes,
+            r.totals.late_minutes,
+            _over_cap(r.totals.late_minutes, r.late_cap_minutes),
             minutes_cell(r.totals.overtime_minutes),
             minutes_cell(r.totals.deficit_minutes),
             minutes_cell(r.totals.net_balance_minutes),

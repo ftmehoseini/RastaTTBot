@@ -1,5 +1,6 @@
 """Attendance rules: live check-in/out, forgotten-entry corrections, daily calculation and reports."""
 
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from uuid import UUID
 
@@ -21,7 +22,15 @@ from app.core.config.policy import Policy
 from app.core.exceptions import ConflictError, ExpiredActionError, NotFoundError, ValidationError
 from app.core.security.rbac import Permission
 from app.core.utils.clock import TimeService, ensure_utc
-from app.core.utils.jalali import JalaliDate, format_date, format_datetime, format_time, iter_days, week_range
+from app.core.utils.jalali import (
+    JalaliDate,
+    format_date,
+    format_datetime,
+    format_time,
+    iter_days,
+    month_range,
+    week_range,
+)
 from app.domain.attendance.calculation import DailyCalculation, ScheduleResolver, get_calculation_policy
 from app.domain.attendance.models import (
     AttendanceDailySummary,
@@ -362,6 +371,7 @@ class AttendanceService:
         summary.gross_worked_minutes = calc.gross_worked_minutes
         summary.required_minutes = calc.required_minutes
         summary.late_minutes = calc.late_minutes
+        summary.floating_late_minutes = calc.floating_late_minutes
         summary.early_departure_minutes = calc.early_departure_minutes
         summary.allowed_late_minutes = calc.allowed_late_minutes
         summary.allowed_early_minutes = calc.allowed_early_minutes
@@ -384,6 +394,11 @@ class AttendanceService:
     async def my_week(self, user: User) -> EmployeeReport:
         access.require(user, Permission.ATTENDANCE_SELF)
         start, end = week_range(self.time.today())
+        return await self.employee_report(user, start, end)
+
+    async def my_month(self, user: User) -> EmployeeReport:
+        access.require(user, Permission.ATTENDANCE_SELF)
+        start, end = month_range(self.time.today())
         return await self.employee_report(user, start, end)
 
     async def team_reports(
@@ -464,7 +479,15 @@ class AttendanceService:
                     correction_notes=notes.get(day, []),
                 )
             )
-        return EmployeeReport(user.id, user.full_name, user.messenger_user_id, start, end, rows, Totals.of(rows))
+        report = EmployeeReport(user.id, user.full_name, user.messenger_user_id, start, end, rows, Totals.of(rows))
+        # Monthly caps only make sense for a report covering exactly one Jalali month.
+        if (start, end) == month_range(start):
+            report = replace(
+                report,
+                late_cap_minutes=self.policy.monthly_unauthorized_late_cap_minutes,
+                early_cap_minutes=self.policy.monthly_early_departure_cap_minutes,
+            )
+        return report
 
     # --- reminders ---------------------------------------------------------------------
 

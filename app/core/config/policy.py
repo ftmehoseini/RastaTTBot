@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 WEEKDAY_CODES: dict[str, int] = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
-def _parse_time(value: Any) -> time:
+def _parse_time(value: Any) -> time | None:
+    if value is None or value == "":
+        return None
     if isinstance(value, time):
         return value
     hour, minute = str(value).strip().split(":")
@@ -56,6 +58,11 @@ class AttendancePolicy(BaseModel):
     allowed_early_departure_minutes: int = Field(default=0, ge=0)
     overtime_rounding_minutes: int = Field(default=15, ge=0)
     calculation_policy: str = "standard_deduction"
+    # floating_window policy: arriving between standard_start_time and this time is allowed lateness
+    floating_check_in_until: time | None = None
+    # Monthly caps shown in month reports (0 = no cap)
+    monthly_unauthorized_late_cap_minutes: int = Field(default=0, ge=0)
+    monthly_early_departure_cap_minutes: int = Field(default=0, ge=0)
     max_shift_hours: int = Field(default=16, ge=1, le=24)
     allow_checkout_without_checkin: bool = False
     live_confirmation_ttl_seconds: int = Field(default=300, ge=10)
@@ -69,6 +76,7 @@ class AttendancePolicy(BaseModel):
         "standard_end_time",
         "check_in_reminder_time",
         "check_out_reminder_time",
+        "floating_check_in_until",
         mode="before",
     )(_parse_time)
 
@@ -85,6 +93,10 @@ class AttendancePolicy(BaseModel):
     def _check_schedule(self) -> "AttendancePolicy":
         if self.standard_end_time <= self.standard_start_time:
             raise ValueError("standard_end_time must be after standard_start_time")
+        if self.floating_check_in_until and not (
+            self.standard_start_time <= self.floating_check_in_until < self.standard_end_time
+        ):
+            raise ValueError("floating_check_in_until must be between standard_start_time and standard_end_time")
         return self
 
     @property

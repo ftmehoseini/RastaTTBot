@@ -65,6 +65,7 @@ class Totals:
     worked_minutes: int = 0
     required_minutes: int = 0
     late_minutes: int = 0
+    floating_late_minutes: int = 0
     early_departure_minutes: int = 0
     overtime_minutes: int = 0
     deficit_minutes: int = 0
@@ -82,6 +83,7 @@ class Totals:
             worked_minutes=sum(x.gross_worked_minutes or 0 for x in c),
             required_minutes=sum(x.required_minutes for x in c),
             late_minutes=sum(x.late_minutes for x in c),
+            floating_late_minutes=sum(x.floating_late_minutes for x in c),
             early_departure_minutes=sum(x.early_departure_minutes for x in c),
             overtime_minutes=sum(x.overtime_minutes for x in c),
             deficit_minutes=sum(x.deficit_minutes for x in c),
@@ -101,6 +103,9 @@ class EmployeeReport:
     end: date
     rows: list[DayRow]
     totals: Totals
+    # Monthly caps, set only when the report covers one whole Jalali month (0 = no cap)
+    late_cap_minutes: int = 0
+    early_cap_minutes: int = 0
 
 
 @dataclass(frozen=True)

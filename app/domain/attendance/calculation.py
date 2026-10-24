@@ -25,6 +25,7 @@ class WorkSchedule:
     allowed_late_minutes: int
     allowed_early_minutes: int
     overtime_rounding_minutes: int
+    floating_until: time | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,8 @@ class DailyCalculation:
     overtime_minutes: int
     deficit_minutes: int
     net_balance_minutes: int | None
+    # Lateness inside the floating check-in window (تأخیر مجاز). late_minutes is the unauthorized part.
+    floating_late_minutes: int = 0
 
 
 class CalculationPolicy(Protocol):
@@ -148,8 +151,80 @@ class StandardDeductionPolicy:
         return max(0, _minutes_between(check_out, expected) - schedule.allowed_early_minutes)
 
 
+class FloatingWindowPolicy:
+    """Floating check-in window, fixed end time and overtime by duration.
+
+        floating_late = min(check_in, floating_until) - start      (تأخیر مجاز, not deducted)
+        late          = max(0, check_in - floating_until)          (تأخیر غیرمجاز)
+        early         = max(0, end - check_out)                    (تعجیل)
+        gross         = check_out - check_in
+        raw = net     = gross - required
+        overtime      = round_down(max(0, raw))                    (اضافه‌کار)
+        deficit       = max(0, -raw)
+
+    The grace settings (allowed_late/early) are subtracted as in the standard policy.
+    """
+
+    name = "floating_window"
+
+    def calculate(
+        self, schedule: WorkSchedule, check_in: datetime | None, check_out: datetime | None
+    ) -> DailyCalculation:
+        base = {
+            "check_in": check_in,
+            "check_out": check_out,
+            "required_minutes": schedule.required_minutes,
+            "allowed_late_minutes": schedule.allowed_late_minutes,
+            "allowed_early_minutes": schedule.allowed_early_minutes,
+        }
+        if check_in is None and check_out is None:
+            # Absent and non-working days look the same as in the standard policy.
+            return StandardDeductionPolicy().calculate(schedule, None, None)
+        floating, late = self._lateness(schedule, check_in) if check_in else (0, 0)
+        if check_in is None or check_out is None:
+            return DailyCalculation(
+                status=DayStatus.MISSING_CHECK_OUT if check_out is None else DayStatus.MISSING_CHECK_IN,
+                gross_worked_minutes=None,
+                late_minutes=late,
+                floating_late_minutes=floating,
+                early_departure_minutes=0,
+                raw_balance_minutes=None,
+                overtime_minutes=0,
+                deficit_minutes=0,
+                net_balance_minutes=None,
+                **base,
+            )
+        gross = _minutes_between(check_in, check_out)
+        raw = gross - schedule.required_minutes
+        return DailyCalculation(
+            status=DayStatus.COMPLETE,
+            gross_worked_minutes=gross,
+            late_minutes=late,
+            floating_late_minutes=floating,
+            early_departure_minutes=StandardDeductionPolicy._early(schedule, check_in.date(), check_out),
+            raw_balance_minutes=raw,
+            overtime_minutes=round_down(raw, schedule.overtime_rounding_minutes),
+            deficit_minutes=max(0, -raw),
+            net_balance_minutes=raw,
+            **base,
+        )
+
+    @staticmethod
+    def _lateness(schedule: WorkSchedule, check_in: datetime) -> tuple[int, int]:
+        """(allowed floating lateness, unauthorized lateness) in minutes."""
+        if not schedule.is_workday:
+            return 0, 0
+        day, tz = check_in.date(), check_in.tzinfo
+        start = datetime.combine(day, schedule.start, tzinfo=tz)
+        until = datetime.combine(day, schedule.floating_until or schedule.start, tzinfo=tz)
+        floating = max(0, _minutes_between(start, min(check_in, until)))
+        late = max(0, _minutes_between(until, check_in) - schedule.allowed_late_minutes)
+        return floating, late
+
+
 CALCULATION_POLICIES: dict[str, CalculationPolicy] = {
     StandardDeductionPolicy.name: StandardDeductionPolicy(),
+    FloatingWindowPolicy.name: FloatingWindowPolicy(),
 }
 
 
@@ -185,4 +260,5 @@ class ScheduleResolver:
             allowed_late_minutes=self.policy.allowed_late_arrival_minutes,
             allowed_early_minutes=self.policy.allowed_early_departure_minutes,
             overtime_rounding_minutes=self.policy.overtime_rounding_minutes,
+            floating_until=self.policy.floating_check_in_until,
         )

@@ -4,6 +4,7 @@ import pytest
 
 from app.core.config.policy import AttendancePolicy
 from app.domain.attendance.calculation import (
+    FloatingWindowPolicy,
     ScheduleResolver,
     StandardDeductionPolicy,
     get_calculation_policy,
@@ -104,3 +105,70 @@ def test_round_down_and_registry() -> None:
     assert get_calculation_policy("standard_deduction").name == "standard_deduction"
     with pytest.raises(ValueError):
         get_calculation_policy("unknown")
+
+
+# --- floating_window: the organization's rules (08:00–16:48, floating until 09:30) -------------
+
+
+@pytest.fixture
+def floating() -> AttendancePolicy:
+    return AttendancePolicy(
+        standard_start_time="08:00",
+        standard_end_time="16:48",
+        standard_workday_minutes=528,
+        floating_check_in_until="09:30",
+        overtime_rounding_minutes=0,
+        calculation_policy="floating_window",
+    )
+
+
+def fcalc(policy: AttendancePolicy, check_in, check_out):
+    schedule = ScheduleResolver(policy, set()).for_day(MONDAY)
+    return FloatingWindowPolicy().calculate(schedule, check_in, check_out)
+
+
+def test_floating_on_time(floating: AttendancePolicy) -> None:
+    c = fcalc(floating, tehran(2026, 10, 19, 8, 0), tehran(2026, 10, 19, 16, 48))
+    assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (0, 0, 0)
+    assert (c.overtime_minutes, c.deficit_minutes, c.net_balance_minutes) == (0, 0, 0)
+
+
+def test_floating_arrival_inside_window_is_allowed(floating: AttendancePolicy) -> None:
+    # In 09:00, out 17:48 → 1 h allowed lateness, full 8:48 worked, no early departure, no overtime
+    c = fcalc(floating, tehran(2026, 10, 19, 9, 0), tehran(2026, 10, 19, 17, 48))
+    assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (60, 0, 0)
+    assert (c.gross_worked_minutes, c.overtime_minutes, c.deficit_minutes) == (528, 0, 0)
+
+
+def test_floating_unauthorized_late_and_early(floating: AttendancePolicy) -> None:
+    # In 09:45, out 16:30 → 1:30 allowed, 0:15 unauthorized, 0:18 early, worked 6:45
+    c = fcalc(floating, tehran(2026, 10, 19, 9, 45), tehran(2026, 10, 19, 16, 30))
+    assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (90, 15, 18)
+    assert (c.gross_worked_minutes, c.overtime_minutes, c.deficit_minutes) == (405, 0, 123)
+    assert c.net_balance_minutes == -123
+
+
+def test_floating_overtime_is_time_beyond_the_official_day(floating: AttendancePolicy) -> None:
+    # In 07:30, out 18:00 → worked 10:30, overtime 1:42 even with the early arrival
+    c = fcalc(floating, tehran(2026, 10, 19, 7, 30), tehran(2026, 10, 19, 18, 0))
+    assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (0, 0, 0)
+    assert c.overtime_minutes == 102
+
+
+def test_floating_missing_check_out_still_shows_lateness(floating: AttendancePolicy) -> None:
+    c = fcalc(floating, tehran(2026, 10, 19, 10, 0), None)
+    assert c.status == DayStatus.MISSING_CHECK_OUT
+    assert (c.floating_late_minutes, c.late_minutes) == (90, 30)
+
+
+def test_floating_non_workday_and_absence(floating: AttendancePolicy) -> None:
+    schedule = ScheduleResolver(floating, set()).for_day(FRIDAY)
+    c = FloatingWindowPolicy().calculate(schedule, tehran(2026, 10, 23, 10, 0), tehran(2026, 10, 23, 12, 0))
+    assert (c.floating_late_minutes, c.late_minutes, c.overtime_minutes) == (0, 0, 120)
+    absent = fcalc(floating, None, None)
+    assert absent.status == DayStatus.ABSENT and absent.deficit_minutes == 528
+
+
+def test_floating_window_must_be_inside_the_day() -> None:
+    with pytest.raises(ValueError):
+        AttendancePolicy(standard_start_time="08:00", standard_end_time="16:48", floating_check_in_until="07:00")

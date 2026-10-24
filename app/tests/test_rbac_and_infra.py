@@ -117,7 +117,7 @@ def test_policy_overrides_and_validation(tmp_path: Path) -> None:
     (tmp_path / "production.yaml").write_text("food:\n  ordering_deadline_time: '09:30'\n", encoding="utf-8")
     policy = load_policy(tmp_path, "production")
     assert policy.food.ordering_deadline_time.strftime("%H:%M") == "09:30"
-    assert policy.attendance.standard_workday_minutes == 480  # untouched default
+    assert policy.attendance.standard_workday_minutes == 528  # untouched default
     (tmp_path / "broken.yaml").write_text("attendance:\n  workdays: [sat, xyz]\n", encoding="utf-8")
     with pytest.raises(ValueError):
         load_policy(tmp_path, "broken")

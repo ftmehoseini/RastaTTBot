@@ -176,11 +176,18 @@ async def test_check_in_and_out_through_buttons(bot: Harness, clock) -> None:
     await bot.press(EMP, confirm)
     assert "خروج شما ثبت شد" in bot.last_text(EMP)
     await bot.press(EMP, AttCb(a="status").pack())
-    assert "کارکرد" in bot.last_text(EMP)
+    status = bot.last_text(EMP)
+    for label in ("ورود", "خروج", "تعجیل", "تأخیر مجاز", "تأخیر غیرمجاز", "اضافه‌کار"):
+        assert label in status
     await bot.press(EMP, AttCb(a="week").pack())
     assert "گزارش هفتگی من" in bot.last_text(EMP)
     await bot.press(EMP, AttCb(a="week_xls").pack())
     assert bot.documents(EMP)
+    await bot.press(EMP, AttCb(a="month").pack())
+    month = bot.last_text(EMP)
+    assert "گزارش ماهانه من" in month and "از سقف" in month and "مانده" in month
+    await bot.press(EMP, AttCb(a="month_xls").pack())
+    assert len(bot.documents(EMP)) == 2
 
 
 async def test_forgotten_entry_flow_with_typed_minutes(bot: Harness, clock) -> None:

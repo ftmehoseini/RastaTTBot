@@ -96,6 +96,7 @@ class AttendanceDailySummary(UUIDPrimaryKeyMixin, Base):
     gross_worked_minutes: Mapped[int | None] = mapped_column(sa.Integer)
     required_minutes: Mapped[int] = mapped_column(sa.Integer)
     late_minutes: Mapped[int] = mapped_column(sa.Integer, default=0)
+    floating_late_minutes: Mapped[int] = mapped_column(sa.Integer, default=0, server_default="0")
     early_departure_minutes: Mapped[int] = mapped_column(sa.Integer, default=0)
     allowed_late_minutes: Mapped[int] = mapped_column(sa.Integer, default=0)
     allowed_early_minutes: Mapped[int] = mapped_column(sa.Integer, default=0)

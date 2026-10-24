@@ -33,14 +33,16 @@ async def punch_out(services: Services, user, clock: FixedClock):
 
 async def test_check_in_records_utc_and_local_work_date(services, make_user, clock) -> None:
     user = await make_user("علی رضایی")
-    clock.set(tehran(2026, 10, 19, 9, 5))
+    clock.set(tehran(2026, 10, 19, 9, 45))
     result = await punch_in(services, user, clock)
     assert result.created
     record = result.record
     assert record.work_date == MONDAY
     assert record.check_in_source == RecordSource.BOT_LIVE
-    assert services.time.to_local(record.check_in_at).strftime("%H:%M") == "09:05"
-    assert result.calculation is not None and result.calculation.late_minutes == 5
+    assert services.time.to_local(record.check_in_at).strftime("%H:%M") == "09:45"
+    # Organization rules: 08:00–09:30 is floating (allowed), after 09:30 is unauthorized
+    assert result.calculation is not None
+    assert (result.calculation.floating_late_minutes, result.calculation.late_minutes) == (90, 15)
     audits = (await services.session.execute(select(AuditLog.action))).scalars().all()
     assert AuditAction.ATTENDANCE_CHECK_IN in audits
 
@@ -74,7 +76,8 @@ async def test_check_out_computes_summary_and_blocks_duplicates(services, make_u
     assert result.calculation.gross_worked_minutes == 530
     summary = (await services.session.execute(select(AttendanceDailySummary))).scalar_one()
     assert summary.status == DayStatus.COMPLETE
-    assert summary.overtime_minutes == 45  # 50 rounded down to 15
+    assert summary.overtime_minutes == 2  # 530 worked - 528 official, no rounding
+    assert summary.floating_late_minutes == 50
     clock.advance(minutes=5)
     preview = await services.attendance.preview_check_out(user)
     assert preview.existing is not None  # shows the registered time instead
@@ -219,5 +222,19 @@ async def test_weekly_report_marks_absent_days_and_totals(services, make_user, c
     assert statuses[date(2026, 10, 18)] == DayStatus.ABSENT
     assert MONDAY not in statuses  # today without a record is not shown yet
     assert report.totals.present_days == 1 and report.totals.absent_days == 1
-    assert report.totals.overtime_minutes == 60
+    assert report.totals.overtime_minutes == 12  # 540 worked - 528 official
+    assert report.totals.floating_late_minutes == 60
     assert report.rows[0].is_manual
+
+
+async def test_monthly_report_carries_caps(services, make_user, clock) -> None:
+    user = await make_user()
+    clock.set(tehran(2026, 10, 19, 12, 0))
+    await services.attendance.submit_correction(
+        user, CorrectionInput(CorrectionType.BOTH, date(2026, 10, 18), time(10, 0), time(16, 0))
+    )
+    month = await services.attendance.my_month(user)
+    assert (month.late_cap_minutes, month.early_cap_minutes) == (420, 180)
+    assert month.totals.late_minutes >= 30 and month.totals.early_departure_minutes >= 48
+    week = await services.attendance.my_week(user)
+    assert (week.late_cap_minutes, week.early_cap_minutes) == (0, 0)  # caps are monthly only

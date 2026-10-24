@@ -57,15 +57,18 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 | Key | Default | Meaning |
 |---|---|---|
 | `workdays` | sat … thu | Days with required work and reminders |
-| `standard_workday_minutes` | `480` | Required minutes on a workday |
-| `standard_start_time` / `standard_end_time` | `09:00` / `17:00` | Used for lateness and early departure |
+| `standard_workday_minutes` | `528` | Required minutes on a workday |
+| `standard_start_time` / `standard_end_time` | `08:00` / `16:48` | Used for lateness and early departure |
 | `check_in_reminder_time` | `10:00` | Reminder to employees without a check-in |
 | `check_out_reminder_time` | `20:00` | Reminder to employees checked in but not out |
 | `reminder_catchup_minutes` | `180` | A reminder still goes out if the scheduler was down at the exact time, within this window |
 | `allowed_late_arrival_minutes` | `0` | Grace before lateness counts |
 | `allowed_early_departure_minutes` | `0` | Grace before early departure counts |
-| `overtime_rounding_minutes` | `15` | Overtime is rounded **down** to this step (0 = no rounding) |
-| `calculation_policy` | `standard_deduction` | Name of the calculation strategy (below) |
+| `overtime_rounding_minutes` | `0` | Overtime is rounded **down** to this step (0 = no rounding) |
+| `calculation_policy` | `floating_window` | Name of the calculation strategy (below) |
+| `floating_check_in_until` | `09:30` | `floating_window` only: check-in until this time is allowed lateness (تأخیر مجاز) |
+| `monthly_unauthorized_late_cap_minutes` | `420` | Monthly cap on unauthorized lateness, shown in month reports (0 = no cap) |
+| `monthly_early_departure_cap_minutes` | `180` | Monthly cap on early departure (تعجیل), shown in month reports (0 = no cap) |
 | `max_shift_hours` | `16` | Longest allowed shift; a check-out after midnight belongs to the previous day within this limit |
 | `allow_checkout_without_checkin` | `false` | Allow check-out on a day without check-in |
 | `live_confirmation_ttl_seconds` | `300` | How long a check-in/out confirm button stays valid |
@@ -73,6 +76,22 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 | `allow_future_manual_correction` | `false` | Forgotten entries for future times allowed |
 | `max_manual_correction_age_days` | `30` | Oldest day a forgotten entry can be submitted for |
 | `manual_correction_requires_approval` | `false` | Store corrections as PENDING_APPROVAL instead of applying them |
+
+#### Calculation policy `floating_window` (organization default)
+
+```
+floating_late_minutes  = min(check_in, floating_check_in_until) - standard_start_time   (تأخیر مجاز, not deducted)
+late_minutes           = max(0, check_in - floating_check_in_until - allowed_late_arrival_minutes)   (تأخیر غیرمجاز)
+early_departure_minutes= max(0, standard_end_time - check_out - allowed_early_departure_minutes)    (تعجیل)
+gross_worked_minutes   = check_out - check_in
+raw = net balance      = gross_worked_minutes - standard_workday_minutes
+overtime_minutes       = round_down(max(0, raw), overtime_rounding_minutes)              (اضافه‌کار)
+deficit_minutes        = max(0, -raw)
+```
+
+Example with 08:00–16:48 and a 09:30 window: in 09:00, out 17:48 → allowed lateness 1:00, no early departure,
+no overtime (worked exactly 8:48). In 09:45, out 16:30 → allowed 1:30, unauthorized 0:15, early 0:18.
+A report that covers one whole Jalali month also shows the monthly caps, what is left and any overrun.
 
 #### Calculation policy `standard_deduction`
 

@@ -45,7 +45,11 @@ def menu_markup():
         [
             [button("✅ ثبت ورود", AttCb(a="in").pack()), button("🏁 ثبت خروج", AttCb(a="out").pack())],
             [button("📝 ثبت فراموشی ورود/خروج", AttCb(a="forgot").pack())],
-            [button("📊 گزارش هفتگی من", AttCb(a="week").pack()), button("📋 وضعیت امروز", AttCb(a="status").pack())],
+            [
+                button("📊 گزارش هفتگی من", AttCb(a="week").pack()),
+                button("📅 گزارش ماهانه من", AttCb(a="month").pack()),
+            ],
+            [button("📋 وضعیت امروز", AttCb(a="status").pack())],
             back_row(),
         ]
     )
@@ -111,7 +115,7 @@ async def check_out_confirm(query: CallbackQuery, callback_data: AttCb, services
     await show(query, text, back_to_menu())
 
 
-# --- status and weekly report ------------------------------------------------------------------
+# --- status, weekly and monthly report ------------------------------------------------------------------
 
 
 @router.callback_query(AttCb.filter(F.a == "status"))
@@ -134,9 +138,20 @@ async def weekly_report(query: CallbackQuery, services: Services, user: User) ->
     await show(query, texts.employee_report(report), markup)
 
 
-@router.callback_query(AttCb.filter(F.a == "week_xls"))
-async def weekly_excel(query: CallbackQuery, services: Services, user: User) -> None:
-    report = await services.attendance.my_week(user)
+@router.callback_query(AttCb.filter(F.a == "month"))
+async def monthly_report(query: CallbackQuery, services: Services, user: User) -> None:
+    report = await services.attendance.my_month(user)
+    markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="month_xls").pack())], back_row("att")])
+    # A whole month of day lines is too long for one message; the Excel file has the details.
+    await show(query, texts.employee_report(report, title="گزارش ماهانه من", with_days=False), markup)
+
+
+@router.callback_query(AttCb.filter(F.a.in_({"week_xls", "month_xls"})))
+async def my_excel(query: CallbackQuery, callback_data: AttCb, services: Services, user: User) -> None:
+    if callback_data.a == "month_xls":
+        report = await services.attendance.my_month(user)
+    else:
+        report = await services.attendance.my_week(user)
     await query.answer("در حال آماده‌سازی فایل…")
     content = build_attendance_workbook([report])
     await send_file(query_message(query), content, report_filename("attendance_me", report.start, report.end))

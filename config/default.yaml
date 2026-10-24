@@ -17,18 +17,25 @@ users:
 attendance:
   # Workdays by English short name (sat sun mon tue wed thu fri)
   workdays: [sat, sun, mon, tue, wed, thu]
-  standard_workday_minutes: 480
-  standard_start_time: "09:00"
-  standard_end_time: "17:00"
+  # Official hours 08:00–16:48 (8 h 48 min)
+  standard_workday_minutes: 528
+  standard_start_time: "08:00"
+  standard_end_time: "16:48"
+  # Floating check-in: arriving 08:00–09:30 is allowed lateness (تأخیر مجاز), after 09:30 it is unauthorized
+  floating_check_in_until: "09:30"
+  # Monthly caps: unauthorized lateness 7 h, early departure (تعجیل) 3 h. 0 = no cap
+  monthly_unauthorized_late_cap_minutes: 420
+  monthly_early_departure_cap_minutes: 180
   check_in_reminder_time: "10:00"
   check_out_reminder_time: "20:00"
   # Reminders still go out if the scheduler was down at the exact time, within this window
   reminder_catchup_minutes: 180
   allowed_late_arrival_minutes: 0
   allowed_early_departure_minutes: 0
-  overtime_rounding_minutes: 15
+  # Overtime = every minute worked beyond the official day (0 = no rounding)
+  overtime_rounding_minutes: 0
   # Name of the calculation strategy, see docs/CONFIGURATION.md
-  calculation_policy: standard_deduction
+  calculation_policy: floating_window
   max_shift_hours: 16
   allow_checkout_without_checkin: false
   # How long a live check-in/out confirmation button stays valid
