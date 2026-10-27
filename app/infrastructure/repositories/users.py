@@ -4,8 +4,26 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.core.security.rbac import ROLE_TITLES_FA, RoleCode
-from app.domain.users.models import Role, User, UserRole
+from app.domain.users.models import EmployeeRosterEntry, Role, User, UserRole
 from app.infrastructure.repositories.base import Repository
+
+
+class RosterRepository(Repository[EmployeeRosterEntry]):
+    model = EmployeeRosterEntry
+
+    async def get_by_code(self, code: str, for_update: bool = False) -> EmployeeRosterEntry | None:
+        stmt = select(EmployeeRosterEntry).where(EmployeeRosterEntry.code == code)
+        if for_update:
+            stmt = stmt.with_for_update()
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_by_user(self, user_id: UUID) -> EmployeeRosterEntry | None:
+        stmt = select(EmployeeRosterEntry).where(EmployeeRosterEntry.user_id == user_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_all(self) -> list[EmployeeRosterEntry]:
+        stmt = select(EmployeeRosterEntry).order_by(EmployeeRosterEntry.full_name, EmployeeRosterEntry.code)
+        return list((await self.session.execute(stmt)).scalars())
 
 
 class UserRepository(Repository[User]):

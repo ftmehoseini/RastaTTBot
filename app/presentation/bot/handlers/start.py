@@ -6,8 +6,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from app.application.services.container import Services
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security.rbac import ROLE_TITLES_FA
 from app.core.utils.jalali import format_date
+from app.core.utils.text import to_persian_digits
 from app.domain.users.models import User
 from app.presentation.bot.callbacks.data import NOOP, NavCb
 from app.presentation.bot.keyboards.common import BTN_HELP
@@ -29,9 +31,24 @@ async def my_id(message: Message, user: User | None) -> None:
 
 
 @router.message(CommandStart())
-async def start(message: Message, state: FSMContext, user: User | None) -> None:
+async def start(message: Message, state: FSMContext, services: Services, user: User | None) -> None:
+    assert message.from_user is not None
+    # Failed staff-number attempts survive /start, so the lock can't be skipped by restarting.
+    data = await state.get_data()
     await state.clear()
     if user is None:
+        if services.users.roster_required(message.from_user.id):
+            await state.set_state(Registration.employee_code)
+            await state.update_data(
+                roster_attempts=data.get("roster_attempts", 0), roster_lock_until=data.get("roster_lock_until")
+            )
+            await message.answer(
+                "سلام! به ربات اداری خوش آمدید 👋\n"
+                "برای ثبت‌نام، شماره موبایل (یا شماره پرسنلی) خود را که در فهرست کارکنان ثبت شده بنویسید.\n"
+                "مثال: ۰۹۱۲۱۲۳۴۵۶۷",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
         await state.set_state(Registration.full_name)
         await message.answer(
             "سلام! به ربات اداری خوش آمدید 👋\nبرای ثبت‌نام، لطفاً نام و نام خانوادگی خود را بنویسید:",
@@ -44,14 +61,59 @@ async def start(message: Message, state: FSMContext, user: User | None) -> None:
     await message.answer(f"سلام {user.full_name} 🌱\nیکی از گزینه‌های منو را انتخاب کنید.", reply_markup=main_menu(user))
 
 
+@router.message(StateFilter(Registration.employee_code), F.text)
+async def registration_code(message: Message, state: FSMContext, services: Services, user: User | None) -> None:
+    assert message.from_user is not None and message.text is not None
+    if user is not None:
+        await state.clear()
+        return
+    policy = services.policy.users
+    data = await state.get_data()
+    now = services.time.now_utc().timestamp()
+    lock_until = data.get("roster_lock_until") or 0
+    if lock_until > now:
+        minutes = int((lock_until - now) // 60) + 1
+        await message.answer(f"⛔️ تعداد تلاش‌ها زیاد بود. {to_persian_digits(minutes)} دقیقه‌ی دیگر دوباره امتحان کنید.")
+        return
+    try:
+        entry = await services.users.find_roster_entry(message.text)
+    except (ValidationError, NotFoundError, ConflictError) as exc:
+        attempts = data.get("roster_attempts", 0) + 1
+        if attempts >= policy.max_roster_attempts:
+            await state.update_data(roster_attempts=0, roster_lock_until=now + policy.roster_lock_minutes * 60)
+            await message.answer(
+                f"❌ {exc.user_message}\n⛔️ تعداد تلاش‌ها به حد مجاز رسید. "
+                f"{to_persian_digits(policy.roster_lock_minutes)} دقیقه‌ی دیگر دوباره امتحان کنید."
+            )
+            return
+        await state.update_data(roster_attempts=attempts)
+        left = to_persian_digits(policy.max_roster_attempts - attempts)
+        await message.answer(f"❌ {exc.user_message}\nدوباره بنویسید ({left} تلاش دیگر باقی است).")
+        return
+    if entry.full_name and services.users.is_valid_name(entry.full_name):
+        await _finish_registration(message, state, services, None, entry.code)
+        return
+    await state.set_state(Registration.full_name)
+    await state.update_data(roster_code=entry.code)
+    await message.answer("✅ شماره تأیید شد.\nحالا نام و نام خانوادگی خود را بنویسید:")
+
+
 @router.message(StateFilter(Registration.full_name), F.text)
 async def registration_name(message: Message, state: FSMContext, services: Services, user: User | None) -> None:
     assert message.from_user is not None and message.text is not None
     if user is not None:
         await state.clear()
         return
+    roster_code = (await state.get_data()).get("roster_code")
+    await _finish_registration(message, state, services, message.text, roster_code)
+
+
+async def _finish_registration(
+    message: Message, state: FSMContext, services: Services, full_name: str | None, roster_code: str | None
+) -> None:
+    assert message.from_user is not None
     new_user = await services.users.register(
-        message.from_user.id, message.chat.id, message.text, message.from_user.username
+        message.from_user.id, message.chat.id, full_name, message.from_user.username, roster_code=roster_code
     )
     await state.clear()
     if not new_user.is_active:

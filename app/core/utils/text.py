@@ -9,6 +9,27 @@ def normalize_digits(text: str) -> str:
     return text.translate(_TO_ASCII)
 
 
+def normalize_employee_code(text: str) -> str | None:
+    """A typed or uploaded staff number in one form, or None if it can't be one.
+
+    Mobile numbers are written many ways (۰۹۱۲…, +98 912…, 0098912…, 912 …); all become 09xxxxxxxxx.
+    Anything else that is only digits (a personnel code) is kept as it is.
+    """
+    digits = normalize_digits(str(text)).strip()
+    if digits.endswith(".0") and digits[:-2].isdigit():  # a number cell read as a float
+        digits = digits[:-2]
+    for ch in " -_()+.\u200c\u200f\u200e":
+        digits = digits.replace(ch, "")
+    if not digits.isdigit() or not 3 <= len(digits) <= 20:
+        return None
+    for prefix in ("0098", "98"):
+        if digits.startswith(prefix + "9") and len(digits) == len(prefix) + 10:
+            return "0" + digits[len(prefix) :]
+    if digits.startswith("9") and len(digits) == 10:
+        return "0" + digits
+    return digits
+
+
 def to_persian_digits(value: object) -> str:
     return str(value).translate(_TO_PERSIAN)
 

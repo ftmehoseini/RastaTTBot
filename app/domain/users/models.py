@@ -40,6 +40,22 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         return {link.role.code for link in self.role_links}
 
 
+class EmployeeRosterEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Staff allowed to register: the admin uploads the list, a person types their number to join."""
+
+    __tablename__ = "employee_roster"
+
+    # Normalized digits: a mobile number as 09xxxxxxxxx, anything else (personnel code) as typed
+    code: Mapped[str] = mapped_column(sa.String(20), unique=True, index=True)
+    full_name: Mapped[str | None] = mapped_column(sa.String(120))
+    hourly: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=sa.false())
+    # Set when someone registers with this number; one number, one account
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("users.id", ondelete="SET NULL"), unique=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(utc_timestamp())
+
+
 class Role(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "roles"
 

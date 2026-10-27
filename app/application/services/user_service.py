@@ -1,3 +1,4 @@
+from dataclasses import asdict, dataclass
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,11 +8,22 @@ from app.core.config.policy import UsersPolicy
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security.rbac import Permission, RoleCode
 from app.core.utils.clock import TimeService
-from app.core.utils.text import clean_text
+from app.core.utils.text import clean_text, normalize_employee_code
 from app.domain.audit.models import AuditAction
-from app.domain.users.models import SCHEDULE_HOURLY, User, UserRole
+from app.domain.users.models import SCHEDULE_HOURLY, EmployeeRosterEntry, User, UserRole
 from app.infrastructure.repositories.audit import AuditRepository
-from app.infrastructure.repositories.users import RoleRepository, UserRepository
+from app.infrastructure.repositories.users import RoleRepository, RosterRepository, UserRepository
+
+
+@dataclass
+class RosterImport:
+    added: int = 0
+    updated: int = 0
+    removed: int = 0
+    kept_registered: int = 0  # not in the new file but already used to register, so kept
+
+    def as_dict(self) -> dict[str, int]:
+        return asdict(self)
 
 
 class UserService:
@@ -27,6 +39,7 @@ class UserService:
         self.time = time
         self.bootstrap_ids = bootstrap_super_admin_ids
         self.users = UserRepository(session)
+        self.roster = RosterRepository(session)
         self.roles = RoleRepository(session)
         self.audit = AuditRepository(session)
 
@@ -45,10 +58,48 @@ class UserService:
             raise ValidationError("لطفاً نام و نام خانوادگی را به‌درستی و فقط با حروف بنویسید.")
         return name
 
-    async def register(self, messenger_user_id: int, chat_id: int, full_name: str, username: str | None) -> User:
-        name = self.validate_full_name(full_name)
+    def is_valid_name(self, text: str) -> bool:
+        try:
+            self.validate_full_name(text)
+        except ValidationError:
+            return False
+        return True
+
+    def roster_required(self, messenger_user_id: int) -> bool:
+        """Whether this person must give a number from the staff list to register."""
+        return self.policy.require_employee_roster and messenger_user_id not in self.bootstrap_ids
+
+    async def find_roster_entry(self, typed: str) -> EmployeeRosterEntry:
+        """The free staff-list entry for a typed number, or a Persian error."""
+        code = normalize_employee_code(typed)
+        if code is None:
+            raise ValidationError("شماره را فقط با رقم بنویسید، مثل ۰۹۱۲۱۲۳۴۵۶۷.")
+        entry = await self.roster.get_by_code(code)
+        if entry is None:
+            raise NotFoundError("این شماره در فهرست کارکنان نیست. اگر درست نوشته‌اید، با مدیر سیستم تماس بگیرید.")
+        if entry.user_id is not None:
+            raise ConflictError("با این شماره قبلاً ثبت‌نام شده است. اگر اشتباه است، با مدیر سیستم تماس بگیرید.")
+        return entry
+
+    async def register(
+        self,
+        messenger_user_id: int,
+        chat_id: int,
+        full_name: str | None,
+        username: str | None,
+        roster_code: str | None = None,
+    ) -> User:
         if await self.users.get_by_messenger_id(messenger_user_id):
             raise ConflictError("شما قبلاً ثبت‌نام کرده‌اید.")
+        entry = None
+        if roster_code is not None or self.roster_required(messenger_user_id):
+            if roster_code is None:
+                raise ValidationError("برای ثبت‌نام، شماره‌ی خود در فهرست کارکنان را وارد کنید.")
+            entry = await self.find_roster_entry(roster_code)
+            entry = await self.roster.get_by_code(entry.code, for_update=True)  # claim it exactly once
+            if entry is None or entry.user_id is not None:
+                raise ConflictError("با این شماره قبلاً ثبت‌نام شده است.")
+        name = self.validate_full_name(full_name or (entry.full_name if entry else None) or "")
         is_bootstrap_admin = messenger_user_id in self.bootstrap_ids
         user = self.users.add(
             User(
@@ -62,6 +113,11 @@ class UserService:
             )
         )
         await self.session.flush()
+        if entry is not None:
+            entry.user_id = user.id
+            entry.claimed_at = self.time.now_utc()
+            if entry.hourly:
+                user.schedule_code = SCHEDULE_HOURLY
         await self._link_role(user, RoleCode.EMPLOYEE, assigned_by=None)
         if is_bootstrap_admin:
             await self._link_role(user, RoleCode.SUPER_ADMIN, assigned_by=None)
@@ -70,7 +126,11 @@ class UserService:
             "user",
             user.id,
             user.id,
-            {"bootstrap_super_admin": is_bootstrap_admin, "active": user.is_active},
+            {
+                "bootstrap_super_admin": is_bootstrap_admin,
+                "active": user.is_active,
+                "roster_code": entry.code if entry else None,
+            },
         )
         await self.session.commit()
         await self.session.refresh(user, ["role_links"])
@@ -147,6 +207,63 @@ class UserService:
             target.schedule_code = code
             await self.session.commit()
         return target
+
+    # --- staff list ------------------------------------------------------------------------------
+
+    async def roster_entries(self, actor: User) -> list[tuple[EmployeeRosterEntry, User | None]]:
+        access.require(actor, Permission.USERS_MANAGE_ROLES)
+        entries = await self.roster.list_all()
+        users = await self.users.get_many({e.user_id for e in entries if e.user_id})
+        return [(e, users.get(e.user_id) if e.user_id else None) for e in entries]
+
+    async def roster_code_of(self, user: User) -> str | None:
+        entry = await self.roster.get_by_user(user.id)
+        return entry.code if entry else None
+
+    async def import_roster(
+        self, actor: User, rows: list[tuple[str, str | None, bool]], dry_run: bool = False
+    ) -> RosterImport:
+        """Replace the staff list: add and update the given numbers; drop the unused ones not in it.
+
+        Numbers someone already registered with are never dropped. A changed type (hourly or
+        full-time) is applied to that person's account too. With dry_run nothing changes: the
+        result is the preview shown before the admin confirms.
+        """
+        access.require(actor, Permission.USERS_MANAGE_ROLES)
+        existing = {e.code: e for e in await self.roster.list_all()}
+        result = RosterImport()
+        given = set()
+        for code, name, hourly in rows:
+            given.add(code)
+            entry = existing.get(code)
+            if entry is None:
+                if not dry_run:
+                    self.roster.add(EmployeeRosterEntry(code=code, full_name=name, hourly=hourly))
+                result.added += 1
+                continue
+            if (entry.full_name, entry.hourly) != (name, hourly):
+                result.updated += 1
+            if dry_run:
+                continue
+            entry.full_name, entry.hourly = name, hourly
+            if entry.user_id is not None:
+                user = await self.users.get(entry.user_id)
+                if user is not None and user.is_hourly != hourly:
+                    user.schedule_code = SCHEDULE_HOURLY if hourly else None
+        for code, entry in existing.items():
+            if code in given:
+                continue
+            if entry.user_id is None:
+                if not dry_run:
+                    await self.session.delete(entry)
+                result.removed += 1
+            else:
+                result.kept_registered += 1
+        if dry_run:
+            return result
+        self.audit.record(AuditAction.ROSTER_IMPORTED, "employee_roster", None, actor.id, result.as_dict())
+        await self.session.commit()
+        return result
 
     async def create_super_admin(self, messenger_user_id: int, full_name: str) -> User:
         """CLI bootstrap: create or promote a user to SUPER_ADMIN."""

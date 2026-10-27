@@ -1,9 +1,10 @@
 """Admin panel: attendance reports, leave inbox and export, users and roles, system health."""
 
+import io
 from datetime import date, timedelta
 from uuid import UUID
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -13,7 +14,8 @@ from app.application.presenters import attendance as att_texts
 from app.application.presenters import leave as leave_texts
 from app.application.services import access
 from app.application.services.container import Services
-from app.core.exceptions import ExpiredActionError, NotFoundError, PermissionDeniedError
+from app.core.config.settings import get_settings
+from app.core.exceptions import ExpiredActionError, NotFoundError, PermissionDeniedError, ValidationError
 from app.core.security.rbac import ROLE_TITLES_FA, Permission, RoleCode, is_admin
 from app.core.utils.jalali import format_date, format_date_numeric, month_range, previous_month_range, week_range
 from app.core.utils.text import to_persian_digits
@@ -21,17 +23,18 @@ from app.domain.leave.models import OPEN_LEAVE_STATUSES
 from app.domain.notifications.models import NotificationType
 from app.domain.users.models import User
 from app.infrastructure.excel.reports import build_attendance_workbook, build_leave_workbook, report_filename
+from app.infrastructure.excel.roster import build_roster_workbook, parse_roster
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
 from app.infrastructure.integrations.messenger import to_markup
 from app.presentation.api.health import check_redis
 from app.presentation.bot.callbacks.data import AdminCb, CalCb, NavCb, UserAdminCb
 from app.presentation.bot.handlers.common import picker_range, query_message, send_file, show, start_picker
 from app.presentation.bot.handlers.leave import approval_buttons
-from app.presentation.bot.keyboards.common import back_row, button, chunk, inline
+from app.presentation.bot.keyboards.common import back_row, button, chunk, confirm_rows, inline, step_row
 from app.presentation.bot.keyboards.pickers import calendar_for
 from app.presentation.bot.middlewares.filters import IsRegistered
 from app.presentation.bot.modules import BTN_ADMIN
-from app.presentation.bot.states.flows import ReportRange
+from app.presentation.bot.states.flows import ReportRange, RosterUpload
 
 router = Router(name="admin")
 router.message.filter(IsRegistered())
@@ -73,6 +76,8 @@ def panel_markup(user: User):
         )
     if access.can(user, Permission.USERS_VIEW):
         rows.append([button("👥 کاربران و نقش‌ها", UserAdminCb(a="list", p=0).pack())])
+    if access.can(user, Permission.USERS_MANAGE_ROLES):
+        rows.append([button("📋 فهرست کارکنان (ثبت‌نام)", AdminCb(a="roster").pack())])
     if access.can(user, Permission.SYSTEM_HEALTH):
         rows.append([button("🩺 وضعیت سیستم", AdminCb(a="health").pack())])
     rows.append(back_row())
@@ -398,6 +403,110 @@ async def user_lookup(message: Message, command: CommandObject, services: Servic
     if target is None:
         raise NotFoundError("کاربری با این شناسه ثبت‌نام نکرده است.")
     await message.answer(_user_card(target, services), reply_markup=_user_markup(target, user))
+
+
+# --- staff list (who may register) -------------------------------------------------------------------
+
+
+@router.callback_query(AdminCb.filter(F.a == "roster"))
+async def roster_panel(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    await state.clear()
+    entries = await services.users.roster_entries(user)
+    registered = sum(1 for _, u in entries if u is not None)
+    required = services.policy.users.require_employee_roster
+    text = (
+        "📋 فهرست کارکنان\n"
+        f"فقط کسانی که شماره‌شان در این فهرست است می‌توانند ثبت‌نام کنند{'' if required else ' (این قانون الان خاموش است)'}.\n\n"
+        f"تعداد شماره‌ها: {to_persian_digits(len(entries))}\n"
+        f"ثبت‌نام کرده: {to_persian_digits(registered)} | هنوز ثبت‌نام نکرده: {to_persian_digits(len(entries) - registered)}"
+    )
+    markup = inline(
+        [
+            [button("📥 دریافت فهرست / قالب", AdminCb(a="roster_xls").pack())],
+            [button("📤 بارگذاری فهرست جدید", AdminCb(a="roster_up").pack())],
+            back_row("admin"),
+        ]
+    )
+    await show(query, text, markup)
+
+
+@router.callback_query(AdminCb.filter(F.a == "roster_xls"))
+async def roster_download(query: CallbackQuery, services: Services, user: User) -> None:
+    entries = await services.users.roster_entries(user)
+    rows = [(e.code, e.full_name, e.hourly, u.full_name if u else None) for e, u in entries]
+    await query.answer("در حال آماده‌سازی فایل…")
+    await send_file(query_message(query), build_roster_workbook(rows), "staff_list.xlsx")
+
+
+@router.callback_query(AdminCb.filter(F.a == "roster_up"))
+async def roster_upload_start(query: CallbackQuery, state: FSMContext, user: User) -> None:
+    access.require(user, Permission.USERS_MANAGE_ROLES)
+    await state.set_state(RosterUpload.waiting_file)
+    await show(
+        query,
+        "📤 فایل اکسل فهرست کارکنان (‎.xlsx‎) را بفرستید.\n"
+        "ستون اول: شماره موبایل یا پرسنلی | ستون دوم: نام (اختیاری) | ستون سوم: نوع همکاری (اختیاری)\n"
+        "قالب را از «دریافت فهرست / قالب» بگیرید.",
+        inline([step_row(AdminCb(a="roster").pack())]),
+    )
+
+
+@router.message(StateFilter(RosterUpload.waiting_file), F.document)
+async def roster_upload_file(message: Message, state: FSMContext, services: Services, user: User, bot: Bot) -> None:
+    access.require(user, Permission.USERS_MANAGE_ROLES)
+    document = message.document
+    assert document is not None
+    if not (document.file_name or "").lower().endswith(".xlsx"):
+        raise ValidationError("فقط فایل اکسل با پسوند ‎.xlsx‎ پذیرفته می‌شود.")
+    limit = get_settings().max_upload_bytes
+    if document.file_size and document.file_size > limit:
+        raise ValidationError("حجم فایل بیشتر از حد مجاز است.")
+    buffer = io.BytesIO()
+    await bot.download(document, destination=buffer)
+    parsed = parse_roster(buffer.getvalue(), services.policy.users.max_full_name_length)
+    if not parsed.ok:
+        await message.answer(
+            "❌ فایل مشکل دارد:\n"
+            + "\n".join(parsed.errors)
+            + "\n\nفایل اصلاح‌شده را دوباره بفرستید یا /cancel را بزنید."
+        )
+        return
+    rows = [(r.code, r.full_name, r.hourly) for r in parsed.rows]
+    preview = await services.users.import_roster(user, rows, dry_run=True)
+    await state.set_state(RosterUpload.confirming)
+    await state.update_data(roster_rows=rows)
+    hourly = sum(1 for r in parsed.rows if r.hourly)
+    text = (
+        f"📋 پیش‌نمایش فهرست جدید: {to_persian_digits(len(rows))} شماره"
+        f" ({to_persian_digits(hourly)} نیروی ساعتی)\n"
+        f"➕ جدید: {to_persian_digits(preview.added)}\n"
+        f"✏️ تغییر نام یا نوع همکاری: {to_persian_digits(preview.updated)}\n"
+        f"➖ حذف (در فایل نیست و ثبت‌نام نکرده): {to_persian_digits(preview.removed)}\n"
+    )
+    if preview.kept_registered:
+        text += f"ℹ️ {to_persian_digits(preview.kept_registered)} نفر در فایل نیستند ولی ثبت‌نام کرده‌اند؛ حذف نمی‌شوند.\n"
+    text += "\nآیا فهرست جدید جایگزین شود؟"
+    await message.answer(text, reply_markup=inline(confirm_rows(AdminCb(a="roster_ok").pack())))
+
+
+@router.message(StateFilter(RosterUpload.waiting_file))
+async def roster_upload_not_a_file(message: Message) -> None:
+    await message.answer("لطفاً فایل اکسل فهرست را به‌صورت فایل (Document) بفرستید یا /cancel را بزنید.")
+
+
+@router.callback_query(StateFilter(RosterUpload.confirming), AdminCb.filter(F.a == "roster_ok"))
+async def roster_upload_confirm(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    rows = [tuple(r) for r in (await state.get_data()).get("roster_rows", [])]
+    await state.clear()
+    if not rows:
+        raise ExpiredActionError()
+    result = await services.users.import_roster(user, rows)
+    await show(
+        query,
+        f"✅ فهرست کارکنان به‌روز شد.\nجدید: {to_persian_digits(result.added)} | تغییر: {to_persian_digits(result.updated)}"
+        f" | حذف: {to_persian_digits(result.removed)}",
+        inline([back_row("admin")]),
+    )
 
 
 # --- health -----------------------------------------------------------------------------------------

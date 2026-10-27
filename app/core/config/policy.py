@@ -42,6 +42,10 @@ class OrganizationPolicy(BaseModel):
 
 class UsersPolicy(BaseModel):
     require_admin_activation: bool = False
+    # Only numbers in the staff list (admin panel → فهرست کارکنان) can register
+    require_employee_roster: bool = True
+    max_roster_attempts: int = Field(default=5, ge=1)
+    roster_lock_minutes: int = Field(default=60, ge=1)
     min_full_name_length: int = Field(default=3, ge=1)
     max_full_name_length: int = Field(default=80, ge=3)
 

@@ -15,7 +15,7 @@ from app.domain.notifications.models import NotificationType
 from app.infrastructure.excel.menu_parser import parse_menu
 from app.infrastructure.excel.reports import build_attendance_workbook
 from app.infrastructure.integrations.messenger import split_text
-from app.tests.conftest import tehran
+from app.tests.conftest import add_roster, tehran
 from app.tests.test_food import VALID_ROWS, menu_file
 
 
@@ -63,13 +63,19 @@ async def test_only_super_admin_manages_roles_and_it_is_audited(services, make_u
 
 
 async def test_registration_and_bootstrap_admin(services, policy) -> None:
-    services._bootstrap_ids = frozenset({777})
+    services.users.bootstrap_ids = frozenset({777})
+    # The bootstrap admin registers without the staff list, so the list can be uploaded.
     admin = await services.users.register(777, 777, "مدیر سیستم", "boss")
     assert RoleCode.SUPER_ADMIN in admin.roles and RoleCode.EMPLOYEE in admin.roles
-    employee = await services.users.register(778, 778, "زهرا احمدی", None)
+    with pytest.raises(ValidationError):  # everyone else needs a number from the list
+        await services.users.register(778, 778, "زهرا احمدی", None)
+    await add_roster(services, "09121234567")
+    employee = await services.users.register(778, 778, "زهرا احمدی", None, roster_code="0912 123 4567")
     assert employee.roles == {RoleCode.EMPLOYEE}
     with pytest.raises(ConflictError):
-        await services.users.register(778, 778, "زهرا احمدی", None)
+        await services.users.register(778, 778, "زهرا احمدی", None, roster_code="09121234567")
+    with pytest.raises(ConflictError):  # one number, one account
+        await services.users.register(779, 779, "کس دیگر", None, roster_code="09121234567")
     for bad in ("ab", "/start", "Ali 123"):
         with pytest.raises(ValidationError):
             services.users.validate_full_name(bad)
@@ -77,6 +83,7 @@ async def test_registration_and_bootstrap_admin(services, policy) -> None:
 
 async def test_require_activation_policy(services, policy) -> None:
     policy.users.require_admin_activation = True
+    policy.users.require_employee_roster = False
     user = await services.users.register(900, 900, "کاربر جدید", None)
     assert not user.is_active
 

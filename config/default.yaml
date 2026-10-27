@@ -11,6 +11,11 @@ organization:
 
 users:
   require_admin_activation: false
+  # New users must type a number from the staff list (admin panel → «📋 فهرست کارکنان»).
+  # IDs in BOOTSTRAP_SUPER_ADMIN_IDS register without it, so the first admin can upload the list.
+  require_employee_roster: true
+  max_roster_attempts: 5
+  roster_lock_minutes: 60
   min_full_name_length: 3
   max_full_name_length: 80
 

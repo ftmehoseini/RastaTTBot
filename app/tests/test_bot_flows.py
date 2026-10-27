@@ -18,9 +18,9 @@ from app.core.security.rbac import RoleCode
 from app.core.utils.clock import TimeService
 from app.infrastructure.excel.menu_parser import parse_menu
 from app.infrastructure.integrations.messenger import AiogramMessenger
-from app.presentation.bot.callbacks.data import AttCb, CalCb, CorrCb, FoodCb, LeaveCb, NavCb
+from app.presentation.bot.callbacks.data import AdminCb, AttCb, CalCb, CorrCb, FoodCb, LeaveCb, NavCb
 from app.presentation.bot.dispatcher import build_dispatcher
-from app.tests.conftest import tehran
+from app.tests.conftest import add_roster, roster_code, tehran
 from app.tests.test_food import VALID_ROWS, menu_file
 
 _ids = itertools.count(1)
@@ -120,7 +120,10 @@ class Harness:
         await self.dp.feed_update(self.bot, Update(update_id=next(self.update_ids), callback_query=query))
 
     async def register(self, uid: int, name: str, *roles: RoleCode) -> None:
+        async with self.session_factory() as session:
+            await add_roster(self.services(session), roster_code(uid))
         await self.text(uid, "/start")
+        await self.text(uid, roster_code(uid))
         await self.text(uid, name)
         if roles:
             async with self.session_factory() as session:
@@ -145,9 +148,15 @@ EMP, SEC, MGR = 5001, 5002, 5003
 
 
 async def test_registration_and_main_menu(bot: Harness) -> None:
+    async with bot.session_factory() as session:
+        await add_roster(bot.services(session), "09121234567")  # no name on the list
     await bot.text(EMP, "سلام")
     assert "/start" in bot.last_text(EMP)
     await bot.text(EMP, "/start")
+    assert "فهرست کارکنان" in bot.last_text(EMP)
+    await bot.text(EMP, "09129999999")
+    assert "در فهرست کارکنان نیست" in bot.last_text(EMP) and "۴ تلاش" in bot.last_text(EMP)
+    await bot.text(EMP, "+98 912 123 4567")  # the same number written another way
     assert "نام و نام خانوادگی" in bot.last_text(EMP)
     await bot.text(EMP, "12")
     assert "به‌درستی" in bot.last_text(EMP) or bot.alerts() == []
@@ -155,6 +164,30 @@ async def test_registration_and_main_menu(bot: Harness) -> None:
     assert "ثبت‌نام شما" in bot.last_text(EMP)
     await bot.text(EMP, "/myid")
     assert str(EMP) in bot.last_text(EMP)
+
+
+async def test_registration_with_the_staff_list(bot: Harness, clock) -> None:
+    async with bot.session_factory() as session:
+        await add_roster(bot.services(session), "09121112233", "زهرا احمدی", hourly=True)
+    await bot.text(EMP, "/start")
+    await bot.text(EMP, "۰۹۱۲۱۱۱۲۲۳۳")  # Persian digits; the list's name is used, no name question
+    assert "ثبت‌نام شما با نام «زهرا احمدی» انجام شد" in bot.last_text(EMP)
+    async with bot.session_factory() as session:
+        user = await bot.services(session).users.get_by_messenger_id(EMP)
+        assert user.is_hourly  # نوع همکاری from the list
+    # The same number can't be used by someone else; too many wrong tries lock registration.
+    await bot.text(SEC, "/start")
+    await bot.text(SEC, "09121112233")
+    assert "قبلاً ثبت‌نام شده" in bot.last_text(SEC)
+    for _ in range(4):
+        await bot.text(SEC, "0912000000")
+    assert "تعداد تلاش‌ها به حد مجاز رسید" in bot.last_text(SEC)
+    await bot.text(SEC, "/start")  # restarting doesn't lift the lock
+    await bot.text(SEC, "09121112233")
+    assert "دقیقه‌ی دیگر دوباره امتحان کنید" in bot.last_text(SEC)
+    clock.advance(minutes=61)
+    await bot.text(SEC, "09121112233")
+    assert "قبلاً ثبت‌نام شده" in bot.last_text(SEC)
 
 
 async def test_check_in_and_out_through_buttons(bot: Harness, clock) -> None:
@@ -454,6 +487,18 @@ async def test_admin_attendance_report_and_role_management(bot: Harness, clock) 
     assert "اضافه شد" in bot.last_text(EMP)
     await bot.text(SEC, f"/user {EMP}")
     assert "ادمین ۲" in bot.last_text(SEC)
+
+    await bot.text(SEC, "🛠 پنل مدیریت")
+    assert AdminCb(a="roster").pack() in bot.buttons(SEC)
+    await bot.press(SEC, AdminCb(a="roster").pack())
+    assert "فهرست کارکنان" in bot.last_text(SEC) and "ثبت‌نام کرده: ۲" in bot.last_text(SEC)
+    await bot.press(SEC, AdminCb(a="roster_xls").pack())
+    assert bot.documents(SEC)[-1].document.filename == "staff_list.xlsx"
+    await bot.press(SEC, AdminCb(a="roster_up").pack())
+    await bot.text(SEC, "این فایل نیست")
+    assert "به‌صورت فایل" in bot.last_text(SEC)
+    await bot.press(EMP, AdminCb(a="roster").pack())  # employees can't manage the list
+    assert any("اجازه" in a for a in bot.alerts())
 
 
 async def test_admin_switches_employee_to_hourly(bot: Harness, clock) -> None:

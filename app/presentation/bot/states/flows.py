@@ -2,6 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class Registration(StatesGroup):
+    employee_code = State()  # number from the staff list
     full_name = State()
 
 
@@ -28,6 +29,11 @@ class GuestFlow(StatesGroup):
 
 
 class MenuUpload(StatesGroup):
+    waiting_file = State()
+    confirming = State()
+
+
+class RosterUpload(StatesGroup):
     waiting_file = State()
     confirming = State()
 

@@ -23,7 +23,7 @@ from app.core.database import Base, create_engine, create_session_factory
 from app.core.security.rbac import RoleCode
 from app.core.utils.clock import FixedClock, TimeService
 from app.domain.leave.models import LeaveRequest
-from app.domain.users.models import User
+from app.domain.users.models import EmployeeRosterEntry, User
 
 TEHRAN = ZoneInfo("Asia/Tehran")
 ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +97,16 @@ def services(session: AsyncSession, policy: Policy, clock: FixedClock, messenger
     return Services(session, policy, TimeService(clock, policy.organization.timezone), messenger)
 
 
+async def add_roster(services: Services, code: str, name: str | None = None, hourly: bool = False) -> None:
+    """Put a number on the staff list, as the admin's upload would."""
+    services.users.roster.add(EmployeeRosterEntry(code=code, full_name=name, hourly=hourly))
+    await services.session.commit()
+
+
+def roster_code(messenger_user_id: int) -> str:
+    return f"09{messenger_user_id:09d}"
+
+
 class UserFactory:
     def __init__(self, services: Services):
         self.services = services
@@ -104,7 +114,10 @@ class UserFactory:
 
     async def __call__(self, name: str = "کاربر آزمایشی", *roles: RoleCode, active: bool = True) -> User:
         self.counter += 1
-        user = await self.services.users.register(self.counter, self.counter, name, None)
+        await add_roster(self.services, roster_code(self.counter))
+        user = await self.services.users.register(
+            self.counter, self.counter, name, None, roster_code=roster_code(self.counter)
+        )
         for role in roles:
             if role != RoleCode.EMPLOYEE:
                 await self.services.users._link_role(user, role, assigned_by=None)
