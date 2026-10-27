@@ -57,8 +57,24 @@ async def test_check_in_reminder_is_idempotent_and_respects_time(services, make_
 async def test_no_reminders_on_non_workdays(services, make_user, clock, messenger) -> None:
     await make_user()
     clock.set(tehran(2026, 10, 23, 10, 5))  # Friday
+    assert (await send_check_in_reminders(services)).sent == 0
+    clock.set(tehran(2026, 10, 22, 10, 5))  # Thursday: off for the organization
+    assert (await send_check_in_reminders(services)).sent == 0
+    clock.set(tehran(2026, 6, 25, 10, 5))  # Thursday 1405/04/04, Ashura: an official holiday
     assert not (await send_check_in_reminders(services)).due
     assert messenger.sent == []
+
+
+async def test_reminders_follow_personal_workdays(services, make_user, clock, messenger) -> None:
+    regular = await make_user("شنبه تا چهارشنبه")
+    thursday = await make_user("پنجشنبه‌کار")
+    thursday.workdays = "sat,sun,mon,tue,wed,thu"
+    await services.session.commit()
+    clock.set(tehran(2026, 10, 22, 10, 5))  # Thursday
+    run = await send_check_in_reminders(services)
+    assert run.sent == 1
+    assert [chat_id for chat_id, _, _ in messenger.sent] == [thursday.chat_id]
+    assert regular.chat_id not in [chat_id for chat_id, _, _ in messenger.sent]
 
 
 async def test_check_out_reminder_only_for_open_records(services, make_user, clock, messenger) -> None:

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.dto.leave import LeaveDecisionResult, LeaveDraft, LeaveQuote, SubmitResult
 from app.application.services import access
 from app.application.services.approval_service import ApprovalService
-from app.application.services.attendance_service import parse_holidays
+from app.application.services.attendance_service import organization_holidays
 from app.core.config.policy import Policy
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError, ValidationError
 from app.core.security.rbac import Permission, RoleCode
@@ -56,7 +56,7 @@ class LeaveService:
         self.requests = LeaveRepository(session)
         self.users = UserRepository(session)
         self.audit = AuditRepository(session)
-        self.schedules = ScheduleResolver(policy.attendance, parse_holidays(policy.organization.holidays))
+        self.schedules = ScheduleResolver(policy.attendance, organization_holidays(policy.organization))
 
     # --- drafting ------------------------------------------------------------------
 

@@ -23,6 +23,8 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     registered_at: Mapped[datetime | None] = mapped_column(utc_timestamp())
     # Optional per-user work schedule name; null means the organization default.
     schedule_code: Mapped[str | None] = mapped_column(sa.String(40))
+    # Own workdays as codes ("sat,sun,mon,tue,wed,thu"); null means the organization's workdays
+    workdays: Mapped[str | None] = mapped_column(sa.String(40))
 
     role_links: Mapped[list["UserRole"]] = relationship(
         back_populates="user",
@@ -34,6 +36,10 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     @property
     def is_hourly(self) -> bool:
         return self.schedule_code == SCHEDULE_HOURLY
+
+    @property
+    def workday_codes(self) -> list[str] | None:
+        return [c for c in self.workdays.split(",") if c] if self.workdays else None
 
     @property
     def roles(self) -> set[RoleCode]:

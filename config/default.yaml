@@ -6,8 +6,13 @@ organization:
   name: "RastaTT"
   timezone: Asia/Tehran
   locale: fa_IR
-  # Jalali dates (YYYY/MM/DD) treated as non-workdays
+  # Iran's official holidays (Nowruz, 22 Bahman, Tasua, Ashura, ...) are days off. Their list is in
+  # app/domain/attendance/iran_holidays.py; lunar dates after 1405/10 are estimates («تخمینی»).
+  official_holidays: true
+  # Extra days off (Jalali dates YYYY/MM/DD), e.g. a day the organization closes
   holidays: []
+  # Official holidays the organization works anyway, or an estimated date that turned out wrong
+  holiday_exceptions: []
 
 users:
   require_admin_activation: false
@@ -20,8 +25,9 @@ users:
   max_full_name_length: 80
 
 attendance:
-  # Workdays by English short name (sat sun mon tue wed thu fri)
-  workdays: [sat, sun, mon, tue, wed, thu]
+  # Workdays by English short name (sat sun mon tue wed thu fri). Thursday, Friday and holidays are
+  # off: all presence on them is overtime. Per person: admin panel → user card → «روزهای کاری».
+  workdays: [sat, sun, mon, tue, wed]
   # Official hours 08:00–16:48 (8 h 48 min)
   standard_workday_minutes: 528
   standard_start_time: "08:00"

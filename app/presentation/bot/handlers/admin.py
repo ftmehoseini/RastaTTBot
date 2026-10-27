@@ -14,6 +14,7 @@ from app.application.presenters import attendance as att_texts
 from app.application.presenters import leave as leave_texts
 from app.application.services import access
 from app.application.services.container import Services
+from app.core.config.policy import WEEKDAY_FA, WEEKDAY_ORDER
 from app.core.config.settings import get_settings
 from app.core.exceptions import ExpiredActionError, NotFoundError, PermissionDeniedError, ValidationError
 from app.core.security.rbac import ROLE_TITLES_FA, Permission, RoleCode, is_admin
@@ -315,7 +316,8 @@ def _user_card(target: User, services: Services) -> str:
         f"👤 {target.full_name}\n🆔 شناسه: {target.messenger_user_id}\n"
         f"نام کاربری: {'@' + target.username if target.username else '—'}\n"
         f"وضعیت: {'فعال ✅' if target.is_active else 'غیرفعال ⛔'}\nنقش‌ها: {roles}\n"
-        f"نوع همکاری: {'ساعتی ⏰' if target.is_hourly else 'تمام‌وقت'}\nثبت‌نام: {registered}"
+        f"نوع همکاری: {'ساعتی ⏰' if target.is_hourly else 'تمام‌وقت'}\n"
+        f"روزهای کاری: {_workdays_text(target, services)}\nثبت‌نام: {registered}"
     )
 
 
@@ -348,8 +350,15 @@ def _user_markup(target: User, actor: User):
                 )
             ]
         )
+        rows.append([button("📅 روزهای کاری", UserAdminCb(a="days", u=target.id.hex).pack())])
     rows.append([button("🔙 فهرست کاربران", UserAdminCb(a="list", p=0).pack())])
     return inline(rows)
+
+
+def _workdays_text(target: User, services: Services) -> str:
+    codes = target.workday_codes or services.policy.attendance.workdays
+    names = "، ".join(WEEKDAY_FA[c] for c in WEEKDAY_ORDER if c in codes)
+    return names if target.workday_codes else f"{names} (پیش‌فرض سازمان)"
 
 
 @router.callback_query(UserAdminCb.filter(F.a == "view"))
@@ -390,6 +399,38 @@ async def user_hourly(query: CallbackQuery, callback_data: UserAdminCb, services
         else "تمام‌وقت: قوانین ساعت رسمی، تأخیر مجاز/غیرمجاز، تعجیل و اضافه‌کار اعمال می‌شود."
     )
     await show(query, f"{_user_card(target, services)}\n\n✔️ {note}", _user_markup(target, user))
+
+
+@router.callback_query(UserAdminCb.filter(F.a.in_({"days", "day", "days_reset"})))
+async def user_workdays(query: CallbackQuery, callback_data: UserAdminCb, services: Services, user: User) -> None:
+    """Toggle a person's workdays; holidays stay off for everyone."""
+    access.require(user, Permission.USERS_MANAGE_ROLES)
+    target_id = UUID(hex=callback_data.u)
+    target = await services.users.get(target_id)
+    if callback_data.a == "day":
+        codes = list(target.workday_codes or services.policy.attendance.workdays)
+        if callback_data.r in codes:
+            codes.remove(callback_data.r)
+        elif callback_data.r in WEEKDAY_FA:
+            codes.append(callback_data.r)
+        default = sorted(services.policy.attendance.workdays) == sorted(codes)
+        target = await services.users.set_workdays(user, target_id, None if default else codes)
+    elif callback_data.a == "days_reset":
+        target = await services.users.set_workdays(user, target_id, None)
+    current = target.workday_codes or services.policy.attendance.workdays
+    rows = [
+        [button(f"{'✅' if c in current else '➖'} {WEEKDAY_FA[c]}", UserAdminCb(a="day", u=target.id.hex, r=c).pack())]
+        for c in WEEKDAY_ORDER
+    ]
+    if target.workday_codes:
+        rows.append([button("↩️ پیش‌فرض سازمان", UserAdminCb(a="days_reset", u=target.id.hex).pack())])
+    rows.append([button("🔙 کارت کاربر", UserAdminCb(a="view", u=target.id.hex).pack())])
+    text = (
+        f"📅 روزهای کاری {target.full_name}\n{_workdays_text(target, services)}\n\n"
+        "روی هر روز بزنید تا کاری/غیرکاری شود. تعطیلات رسمی برای همه تعطیل است.\n"
+        "حضور در روز غیرکاری کلاً اضافه‌کار حساب می‌شود."
+    )
+    await show(query, text, inline(rows))
 
 
 @router.message(Command("user"))

@@ -13,6 +13,17 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 WEEKDAY_CODES: dict[str, int] = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+# The Persian week, Saturday first
+WEEKDAY_ORDER = ("sat", "sun", "mon", "tue", "wed", "thu", "fri")
+WEEKDAY_FA = {
+    "sat": "شنبه",
+    "sun": "یکشنبه",
+    "mon": "دوشنبه",
+    "tue": "سه‌شنبه",
+    "wed": "چهارشنبه",
+    "thu": "پنجشنبه",
+    "fri": "جمعه",
+}
 
 
 def _parse_time(value: Any) -> time | None:
@@ -28,9 +39,14 @@ class OrganizationPolicy(BaseModel):
     name: str = "Organization"
     timezone: str = "Asia/Tehran"
     locale: str = "fa_IR"
+    # Iran's official holidays (app/domain/attendance/iran_holidays.py) are days off
+    official_holidays: bool = True
+    # Extra days off (Jalali dates), e.g. a day the organization closes
     holidays: list[str] = Field(default_factory=list)
+    # Official holidays the organization works anyway (Jalali dates)
+    holiday_exceptions: list[str] = Field(default_factory=list)
 
-    @field_validator("holidays")
+    @field_validator("holidays", "holiday_exceptions")
     @classmethod
     def _check_holidays(cls, values: list[str]) -> list[str]:
         for value in values:
@@ -51,7 +67,7 @@ class UsersPolicy(BaseModel):
 
 
 class AttendancePolicy(BaseModel):
-    workdays: list[str] = Field(default_factory=lambda: ["sat", "sun", "mon", "tue", "wed", "thu"])
+    workdays: list[str] = Field(default_factory=lambda: ["sat", "sun", "mon", "tue", "wed"])
     standard_workday_minutes: int = Field(default=480, ge=0)
     standard_start_time: time = time(9, 0)
     standard_end_time: time = time(17, 0)

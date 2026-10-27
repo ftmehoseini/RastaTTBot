@@ -206,4 +206,4 @@ async def test_daily_leave_can_exclude_non_workdays(services, people, policy, cl
     clock.set(tehran(2026, 10, 19, 8, 0))
     draft = LeaveDraft(LeavePayType.PAID, LeaveUnit.DAILY, date(2026, 10, 22), date(2026, 10, 24))  # Thu–Sat
     quote = await services.leave.preview(people["employee"], draft)
-    assert quote.days_count == 2  # Friday excluded
+    assert quote.days_count == 1  # Thursday and Friday are not workdays

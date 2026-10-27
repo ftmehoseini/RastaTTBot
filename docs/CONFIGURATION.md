@@ -43,7 +43,9 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 | `name` | `RastaTT` | Organization name (informational) |
 | `timezone` | `Asia/Tehran` | Timezone for every business date and message. Storage is always UTC |
 | `locale` | `fa_IR` | Informational; all user messages are Persian |
-| `holidays` | `[]` | Jalali dates (`1405/01/01`) treated as non-workdays: no reminders, no required minutes |
+| `official_holidays` | `true` | Iran's official holidays are days off for everyone (list: `app/domain/attendance/iran_holidays.py`, 1404–1407, generated from the official calendar; lunar dates not yet confirmed are marked «تخمینی». Regenerate yearly with `scripts/generate_iran_holidays.py`) |
+| `holidays` | `[]` | Extra days off (Jalali dates `1405/01/01`), e.g. a day the organization closes |
+| `holiday_exceptions` | `[]` | Official holidays the organization works anyway, or an estimated date that turned out wrong |
 
 ### users
 
@@ -58,7 +60,7 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 
 | Key | Default | Meaning |
 |---|---|---|
-| `workdays` | sat … thu | Days with required work and reminders |
+| `workdays` | sat … wed | Days with required work and check-in reminders. A person can have their own (admin panel → user card → «📅 روزهای کاری», stored in `users.workdays`) |
 | `standard_workday_minutes` | `528` | Required minutes on a workday |
 | `standard_start_time` / `standard_end_time` | `08:00` / `16:48` | Used for lateness and early departure |
 | `check_in_reminder_time` | `10:00` | Reminder to employees without a check-in |
@@ -107,8 +109,11 @@ Month (the summary block of the workbook):
 کارکرد نهایی           = ΣK + MIN(ΣO, قابل جبران) + مرخصی با حقوق + مازاد × 0.8 − جبران نشده × 1.6
 ```
 
-Example: in 11:34, out 19:00 → K 5:14, L 1:30, M 2:04, O 2:12. The formulas don't look at the weekday,
-so work on a Friday is calculated the same way (as in the workbook).
+Example: in 11:34, out 19:00 → K 5:14, L 1:30, M 2:04, O 2:12.
+
+**Days off** (holidays for everyone, and weekdays outside the person's workdays — Thursday and
+Friday by default): all presence is overtime. The formulas stay the same; E = F = G = the check-in
+time makes them give K = L = M = N = 0 and O = J. The Excel export writes exactly those inputs.
 
 #### Calculation policy `standard_deduction`
 

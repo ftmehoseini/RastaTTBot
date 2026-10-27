@@ -27,7 +27,8 @@ async def send_check_in_reminders(services: Services) -> ReminderRun:
     policy = services.policy.attendance
     attendance = services.attendance
     today = services.time.today()
-    if not attendance.is_workday(today) or not attendance.reminder_due(policy.check_in_reminder_time):
+    # Holidays are off for everyone; weekdays are checked per person (some work on Thursday).
+    if attendance.is_holiday(today) or not attendance.reminder_due(policy.check_in_reminder_time):
         return ReminderRun(due=False)
     recipients = await attendance.check_in_reminder_recipients(today)
     result = await services.notifications.notify_many(

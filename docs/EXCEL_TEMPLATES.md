@@ -44,7 +44,7 @@ The organization's own timesheet layout, sent for whole-month reports (admin: م
 |---|---|---|
 | A روز, B ماه, C تاریخ | bot | Weekday, Jalali month, day |
 | D ساعت ورود, H ساعت خروج | bot | Times (a check-out after midnight is more than 24 h; a check-out without a check-in is left out and noted) |
-| E شروع شناوری, F پایان شناوری, G ساعت مجاز خروج | bot | 8:00, 9:30, 16:48 from the policy |
+| E شروع شناوری, F پایان شناوری, G ساعت مجاز خروج | bot | 8:00, 9:30, 16:48 from the policy; on a day off with presence all three are the check-in time, so the formulas count everything as overtime |
 | I مرخصی  با حقوق | bot | Approved paid leave: an hourly leave's length, 8:48 for a day of daily leave |
 | J ساعت مفید … O اضافه کار روزانه | **formulas** | The workbook's formulas, character for character |
 | P توضیحات | bot | Holiday, leave, missing time, ثبت فراموشی / ثبت دستی / ویرایش‌شده |

@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services import access
-from app.core.config.policy import UsersPolicy
+from app.core.config.policy import WEEKDAY_CODES, WEEKDAY_ORDER, UsersPolicy
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security.rbac import Permission, RoleCode
 from app.core.utils.clock import TimeService
@@ -212,6 +212,26 @@ class UserService:
                 {"from": target.schedule_code, "to": code},
             )
             target.schedule_code = code
+            await self.session.commit()
+        return target
+
+    async def set_workdays(self, actor: User, target_id: UUID, codes: list[str] | None) -> User:
+        """A person's own workdays (e.g. one who also works Thursday); None = the organization's."""
+        access.require(actor, Permission.USERS_MANAGE_ROLES)
+        target = await self.users.get(target_id, for_update=True)
+        if target is None:
+            raise NotFoundError("کاربر پیدا نشد.")
+        value = None
+        if codes is not None:
+            unknown = [c for c in codes if c not in WEEKDAY_CODES]
+            if unknown or not codes:
+                raise ValidationError("دست‌کم یک روز کاری انتخاب کنید.")
+            value = ",".join(c for c in WEEKDAY_ORDER if c in codes)
+        if target.workdays != value:
+            self.audit.record(
+                AuditAction.USER_WORKDAYS_CHANGED, "user", target.id, actor.id, {"from": target.workdays, "to": value}
+            )
+            target.workdays = value
             await self.session.commit()
         return target
 

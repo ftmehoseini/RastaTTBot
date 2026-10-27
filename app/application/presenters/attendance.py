@@ -79,6 +79,8 @@ def _day_line(row: DayRow) -> str:
         lines.append("   ⚠️ ورود ثبت نشده")
     elif c.hourly:
         lines.append(f"   کارکرد {format_minutes(c.gross_worked_minutes)}")
+    elif not row.is_workday:
+        lines.append(f"   🌙 روز تعطیل — کل حضور اضافه‌کار: {format_minutes(c.overtime_minutes)}")
     else:
         lines.append(f"{lateness} | تعجیل* {format_minutes(c.early_departure_minutes)}")
         lines.append(

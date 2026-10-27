@@ -13,6 +13,7 @@ import openpyxl
 import pytest
 
 from app.application.dto.attendance import CorrectionInput
+from app.core.utils.jalali import to_jalali
 from app.domain.attendance.models import CorrectionType
 from app.infrastructure.excel.timesheet import FORMULAS, build_timesheet_workbook
 from app.tests.conftest import tehran
@@ -22,18 +23,22 @@ DAYS = (
     (date(2026, 10, 18), (11, 34), (19, 0)),
     (date(2026, 10, 19), (9, 25), (16, 27)),
     (date(2026, 10, 20), (7, 40), (16, 0)),
+    (date(2026, 10, 22), (9, 50), (13, 20)),  # Thursday, a day off: all overtime
 )
 
 
 async def _month_workbook(services, make_user, clock) -> tuple[bytes, object]:
     user = await make_user("مریم کریمی")
-    clock.set(tehran(2026, 10, 21, 20, 0))
+    clock.set(tehran(2026, 10, 22, 20, 0))  # 30 مهر, the last day of the month
     for day, check_in, check_out in DAYS:
         await services.attendance.submit_correction(
-            user, CorrectionInput(CorrectionType.BOTH, day, time(*check_in), time(*check_out))
+            user,
+            CorrectionInput(
+                CorrectionType.BOTH, day, time(*check_in), time(*check_out), same_day=day == date(2026, 10, 22)
+            ),
         )
     report = await services.attendance.my_month(user)
-    content = build_timesheet_workbook([report], services.attendance.sheet_rules, set())
+    content = build_timesheet_workbook([report], services.attendance.sheet_rules, services.attendance.holidays)
     return content, report
 
 
@@ -53,6 +58,9 @@ async def test_workbook_layout_and_formulas(services, make_user, clock) -> None:
     assert ws["P35"].value == "=B32+MIN(K32, P32)+B34+P33*0.8-P34*1.6"
     assert ws["L34"].value == time(7, 0) and ws["L35"].value == time(3, 0)
     assert "ثبت فراموشی" in ws.cell(row, 16).value
+    # Thursday 30 مهر is a day off: E = F = G = the check-in, so the formulas give all overtime
+    assert [ws.cell(31, col).value for col in (4, 5, 6, 7)] == [time(9, 50)] * 4
+    assert "کل حضور اضافه‌کار" in ws.cell(31, 16).value
 
 
 def _minutes(value) -> int:
@@ -83,8 +91,8 @@ async def test_libreoffice_recalculation_matches_the_bot(services, make_user, cl
     )
     ws = openpyxl.load_workbook(out / "timesheet.xlsx", data_only=True).active
     rows = {r.work_date: r for r in report.rows}
-    for index, (day, _, _) in enumerate(DAYS):
-        excel_row = 26 + index
+    for day, _, _ in DAYS:
+        excel_row = to_jalali(day).day + 1
         c = rows[day].calculation
         got = [_minutes(ws.cell(excel_row, col).value) for col in range(10, 16)]
         want = [
@@ -96,6 +104,8 @@ async def test_libreoffice_recalculation_matches_the_bot(services, make_user, cl
             c.overtime_minutes,
         ]
         assert got == want, day
+    thursday = rows[date(2026, 10, 22)].calculation
+    assert (thursday.overtime_minutes, thursday.late_minutes, thursday.normal_minutes) == (210, 0, 0)
     m = report.sheet
     summary = {
         "B32": m.normal,

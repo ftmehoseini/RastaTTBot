@@ -9,7 +9,7 @@ notes); Excel calculates everything else when the file is opened, with exactly t
 
 import io
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 
 from openpyxl import Workbook
@@ -99,11 +99,13 @@ def _minutes_of(day: date, value: datetime) -> int:
     return int((value - midnight).total_seconds() // 60)
 
 
-def _notes(row: DayRow | None, day: date, holidays: set[date]) -> str:
+def _notes(row: DayRow | None, day: date, holidays: Mapping[date, str]) -> str:
     notes = []
     if day in holidays:
-        notes.append("تعطیل رسمی")
+        notes.append(f"تعطیل رسمی: {holidays[day]}")
     if row is not None:
+        if not row.is_workday and row.calculation.check_in is not None:
+            notes.append("روز تعطیل: کل حضور اضافه‌کار")
         if row.leave_note:
             notes.append(row.leave_note)
         status = row.calculation.status
@@ -173,7 +175,7 @@ def add_timesheet_sheet(
     workbook: Workbook,
     report: EmployeeReport,
     rules: SheetRules,
-    holidays: set[date],
+    holidays: Mapping[date, str],
     table_name: str,
     title: str,
 ) -> Worksheet:
@@ -201,9 +203,15 @@ def add_timesheet_sheet(
         }
         # A check-out without a check-in is left out: the formulas would read it as presence from 0:00.
         if c is not None and c.check_in is not None:
-            values["ساعت ورود"] = _clock(_minutes_of(day, c.check_in))
+            check_in = _minutes_of(day, c.check_in)
+            values["ساعت ورود"] = _clock(check_in)
             if c.check_out is not None:
                 values["ساعت خروج"] = _clock(_minutes_of(day, c.check_out))
+            if not row.is_workday:
+                # Day off: E = F = G = the check-in makes the same formulas count all presence as
+                # overtime (no normal work, lateness or early departure), as the bot does.
+                for header in ("شروع شناوری", "پایان شناوری", "ساعت مجاز خروج"):
+                    values[header] = _clock(check_in)
         if row is not None and row.paid_leave_minutes:
             values["مرخصی  با حقوق"] = _clock(row.paid_leave_minutes)
         for col, (header, _) in enumerate(COLUMNS, start=1):
@@ -235,7 +243,9 @@ def add_timesheet_sheet(
     return sheet
 
 
-def build_timesheet_workbook(reports: Sequence[EmployeeReport], rules: SheetRules, holidays: set[date]) -> bytes:
+def build_timesheet_workbook(
+    reports: Sequence[EmployeeReport], rules: SheetRules, holidays: Mapping[date, str]
+) -> bytes:
     """One timesheet sheet per (full-time) employee; each report must cover one Jalali month."""
     workbook = Workbook()
     default = workbook.active

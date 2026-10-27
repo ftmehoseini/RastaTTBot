@@ -18,7 +18,17 @@ from app.core.security.rbac import RoleCode
 from app.core.utils.clock import TimeService
 from app.infrastructure.excel.menu_parser import parse_menu
 from app.infrastructure.integrations.messenger import AiogramMessenger
-from app.presentation.bot.callbacks.data import AdminCb, AttCb, CalCb, CorrCb, FoodCb, KeyCb, LeaveCb, NavCb
+from app.presentation.bot.callbacks.data import (
+    AdminCb,
+    AttCb,
+    CalCb,
+    CorrCb,
+    FoodCb,
+    KeyCb,
+    LeaveCb,
+    NavCb,
+    UserAdminCb,
+)
 from app.presentation.bot.dispatcher import build_dispatcher
 from app.tests.conftest import add_roster, roster_code, tehran
 from app.tests.test_food import VALID_ROWS, menu_file
@@ -587,6 +597,35 @@ async def test_admin_switches_employee_to_hourly(bot: Harness, clock) -> None:
     await bot.press(EMP, AttCb(a="month").pack())
     month = bot.last_text(EMP)
     assert "نیروی ساعتی" in month and "سقف" not in month and "تعجیل" not in month
+
+
+async def test_admin_gives_one_employee_thursday(bot: Harness, clock) -> None:
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(MGR, "رضا محمدی")
+    await bot.register(SEC, "سارا منشی", RoleCode.SUPER_ADMIN)
+    async with bot.session_factory() as session:
+        target = await bot.services(session).users.get_by_messenger_id(EMP)
+    await bot.text(SEC, f"/user {EMP}")
+    assert "روزهای کاری: شنبه، یکشنبه، دوشنبه، سه‌شنبه، چهارشنبه (پیش‌فرض سازمان)" in bot.last_text(SEC)
+    await bot.press(SEC, UserAdminCb(a="days", u=target.id.hex).pack())
+    await bot.press(SEC, UserAdminCb(a="day", u=target.id.hex, r="thu").pack())
+    workdays_line = bot.last_text(SEC).split("\n")[1]
+    assert workdays_line == "شنبه، یکشنبه، دوشنبه، سه‌شنبه، چهارشنبه، پنجشنبه"  # her own now
+    await bot.press(EMP, UserAdminCb(a="day", u=target.id.hex, r="fri").pack())  # not for employees
+    assert any("اجازه" in a for a in bot.alerts())
+
+    clock.set(tehran(2026, 10, 22, 9, 50))  # Thursday
+    for uid in (EMP, MGR):
+        await bot.press(uid, AttCb(a="in").pack())
+        await bot.press(uid, next(b for b in bot.buttons(uid) if b.startswith("att:in_ok")))
+    clock.set(tehran(2026, 10, 22, 13, 20))
+    for uid in (EMP, MGR):
+        await bot.press(uid, AttCb(a="out").pack())
+        await bot.press(uid, next(b for b in bot.buttons(uid) if b.startswith("att:out_ok")))
+    await bot.press(EMP, AttCb(a="week").pack())
+    assert "غیرمجاز* ۰:۲۰" in bot.last_text(EMP)  # a workday for her: normal rules
+    await bot.press(MGR, AttCb(a="week").pack())
+    assert "روز تعطیل — کل حضور اضافه‌کار: ۳:۳۰" in bot.last_text(MGR)  # a day off for him
 
 
 async def test_soroush_row_limit_applies_to_every_keyboard(bot: Harness, clock) -> None:

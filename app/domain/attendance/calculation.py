@@ -5,11 +5,12 @@ The organization picks a strategy by name (`attendance.calculation_policy`). New
 `CalculationPolicy` and registering it in `CALCULATION_POLICIES`.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Protocol
 
-from app.core.config.policy import AttendancePolicy
+from app.core.config.policy import WEEKDAY_CODES, AttendancePolicy
 from app.domain.attendance.models import DayStatus
 from app.domain.attendance.timesheet import SheetDay, sheet_day
 from app.domain.users.models import SCHEDULE_HOURLY
@@ -222,16 +223,25 @@ class FloatingWindowPolicy:
         def minutes(value: datetime | None) -> int | None:
             return _minutes_between(midnight, value) if value else None
 
-        def clock(value: time) -> int:
-            return value.hour * 60 + value.minute
+        d, h = minutes(check_in), minutes(check_out)
+        e, f, g = sheet_window(schedule.is_workday, d, schedule)
+        return sheet_day(d, h, e, f, g)
 
-        return sheet_day(
-            minutes(check_in),
-            minutes(check_out),
-            clock(schedule.start),
-            clock(schedule.floating_until or schedule.start),
-            clock(schedule.end),
-        )
+
+def sheet_window(is_workday: bool, check_in: int | None, schedule: WorkSchedule) -> tuple[int, int, int]:
+    """E, F, G of the timesheet row (شروع شناوری, پایان شناوری, ساعت مجاز خروج).
+
+    On a day off (Friday, Thursday for most, holidays) all presence is overtime. The formulas stay
+    the same; E = F = G = the check-in time makes them give exactly that: no normal work, no
+    lateness, no early departure, and overtime = check-out − check-in.
+    """
+    if not is_workday and check_in:
+        return check_in, check_in, check_in
+
+    def clock(value: time) -> int:
+        return value.hour * 60 + value.minute
+
+    return clock(schedule.start), clock(schedule.floating_until or schedule.start), clock(schedule.end)
 
 
 class HourlyPolicy:
@@ -286,19 +296,27 @@ def get_calculation_policy(name: str) -> CalculationPolicy:
 class ScheduleResolver:
     """Returns the schedule for an employee-day.
 
-    Today there is one organization-wide schedule. Per-user or per-group schedules plug in
-    here (keyed by `User.schedule_code`) without touching the calculation or the reports.
+    One organization-wide schedule; a person may have their own workdays (`User.workdays`) and
+    hourly staff their own calculation (`User.schedule_code`). Holidays apply to everyone.
     """
 
-    def __init__(self, policy: AttendancePolicy, holidays: set[date]):
+    def __init__(self, policy: AttendancePolicy, holidays: Mapping[date, str] | set[date]):
         self.policy = policy
         self.holidays = holidays
 
-    def is_workday(self, day: date) -> bool:
-        return day.weekday() in self.policy.workday_numbers and day not in self.holidays
+    def holiday_name(self, day: date) -> str | None:
+        if day not in self.holidays:
+            return None
+        return self.holidays.get(day, "تعطیل") if isinstance(self.holidays, Mapping) else "تعطیل"
 
-    def for_day(self, day: date, schedule_code: str | None = None) -> WorkSchedule:
-        workday = self.is_workday(day) and schedule_code != SCHEDULE_HOURLY
+    def is_workday(self, day: date, workday_codes: list[str] | None = None) -> bool:
+        weekdays = frozenset(WEEKDAY_CODES[c] for c in workday_codes) if workday_codes else self.policy.workday_numbers
+        return day.weekday() in weekdays and day not in self.holidays
+
+    def for_day(
+        self, day: date, schedule_code: str | None = None, workday_codes: list[str] | None = None
+    ) -> WorkSchedule:
+        workday = self.is_workday(day, workday_codes) and schedule_code != SCHEDULE_HOURLY
         return WorkSchedule(
             code=schedule_code or "default",
             is_workday=workday,

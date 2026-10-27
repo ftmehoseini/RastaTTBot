@@ -74,7 +74,7 @@ class AdminCb(CallbackData, prefix="adm"):
 
 
 class UserAdminCb(CallbackData, prefix="ua"):
-    a: str  # list | view | role | active | hourly
+    a: str  # list | view | role | active | hourly | days | day | days_reset
     u: str = ""  # user id hex
-    r: str = ""  # role code
+    r: str = ""  # role code, or weekday code for "day"
     p: int = 0  # page or on/off flag

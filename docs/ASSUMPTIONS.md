@@ -45,7 +45,8 @@ These were decided without asking, to keep work moving. Each one is configurable
 - Timestamps are stored in UTC (`timestamptz`). Every business date is the Tehran local date.
 - Reports and uploads are written to `REPORTS_DIR` / `UPLOAD_DIR` temporarily and deleted after sending; a daily cleanup task removes anything older than `reports.retention_hours`.
 - Official Iranian holidays are not built in. Add them as Jalali dates in `organization.holidays`.
-- Attendance figures follow the organization's Excel timesheet exactly, including on Fridays and holidays (the workbook's formulas don't look at the weekday). Rows where the workbook has hours typed over a formula can't be reproduced.
+- Attendance figures follow the organization's Excel timesheet formulas. On days off (Thursday, Friday, Iran's official holidays, or any day outside a person's own workdays) all presence is overtime; this is done by the inputs E = F = G = check-in, not by changing the formulas. Rows where the workbook has hours typed over a formula can't be reproduced.
+- Lunar holidays after the confirmed part of the official calendar are estimates (marked «تخمینی»); `organization.holiday_exceptions` / `holidays` correct a wrong one.
 - کارکرد نهایی uses the newest sheet's formula (آذر: + surplus × 0.8 − uncompensated × 1.6); مهر and آبان had the version without the factors. Set both factors to 0 for that version.
 - «مرخصی مجاز» (the leave allowance carried between months) is not tracked by the bot; the cell is left for the admin.
 - A day of approved paid daily leave counts 8:48 in «مرخصی با حقوق»; days are counted as `leave.count_non_workdays_in_daily_leave` says.

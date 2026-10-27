@@ -184,14 +184,50 @@ def test_floating_missing_check_out_still_shows_lateness(floating: AttendancePol
     assert (c.floating_late_minutes, c.late_minutes) == (90, 30)
 
 
-def test_floating_non_workday_uses_the_same_formulas_and_absence(floating: AttendancePolicy) -> None:
-    # The Excel formulas do not look at the weekday, so neither does the bot (Friday 10:00–12:00).
+def test_floating_day_off_is_all_overtime_and_absence(floating: AttendancePolicy) -> None:
+    # Friday 10:00–12:00: no lateness, no normal work, everything is overtime.
     schedule = ScheduleResolver(floating, set()).for_day(FRIDAY)
     c = FloatingWindowPolicy().calculate(schedule, tehran(2026, 10, 23, 10, 0), tehran(2026, 10, 23, 12, 0))
-    assert (c.floating_late_minutes, c.late_minutes, c.normal_minutes, c.overtime_minutes) == (90, 30, 120, 0)
-    assert c.deficit_minutes == 0  # nothing is required on a Friday
+    assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (0, 0, 0)
+    assert (c.normal_minutes, c.overtime_minutes, c.deficit_minutes) == (0, 120, 0)
     absent = fcalc(floating, None, None)
     assert absent.status == DayStatus.ABSENT and absent.deficit_minutes == 528
+
+
+def test_thursday_holidays_and_personal_workdays() -> None:
+    from app.application.services.attendance_service import organization_holidays
+    from app.core.config.policy import OrganizationPolicy
+
+    policy = AttendancePolicy(
+        standard_start_time="08:00",
+        standard_end_time="16:48",
+        standard_workday_minutes=528,
+        floating_check_in_until="09:30",
+        calculation_policy="floating_window",
+    )
+    holidays = organization_holidays(OrganizationPolicy())
+    resolver = ScheduleResolver(policy, holidays)
+    thursday, ashura, saturday = date(2026, 10, 22), date(2026, 6, 25), date(2026, 10, 24)
+    assert not resolver.is_workday(thursday) and resolver.is_workday(saturday)
+    assert resolver.is_workday(thursday, ["sat", "sun", "mon", "tue", "wed", "thu"])  # a person's own days
+    assert resolver.holiday_name(ashura) == "عاشورای حسینی"
+    assert not resolver.is_workday(date(2026, 6, 24), ["sat", "sun", "mon", "tue", "wed", "thu"])  # Tasua (Wed)
+    # Thursday work by someone who doesn't work Thursdays: all overtime
+    c = FloatingWindowPolicy().calculate(
+        resolver.for_day(thursday), tehran(2026, 10, 22, 9, 50), tehran(2026, 10, 22, 13, 20)
+    )
+    assert (c.late_minutes, c.floating_late_minutes, c.overtime_minutes) == (0, 0, 210)
+    # ...and normal rules for someone whose workdays include Thursday
+    c = FloatingWindowPolicy().calculate(
+        resolver.for_day(thursday, None, ["sat", "sun", "mon", "tue", "wed", "thu"]),
+        tehran(2026, 10, 22, 9, 50),
+        tehran(2026, 10, 22, 13, 20),
+    )
+    assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes, c.overtime_minutes) == (90, 20, 208, 0)
+    # The organization can work an official holiday, or close on a day of its own
+    org = OrganizationPolicy(holiday_exceptions=["1405/04/04"], holidays=["1405/08/10"])
+    days = organization_holidays(org)
+    assert ashura not in days and days[date(2026, 11, 1)] == "تعطیل سازمان"
 
 
 def test_floating_window_must_be_inside_the_day() -> None:

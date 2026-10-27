@@ -16,6 +16,8 @@ Buttons are shown according to the user's permissions (`presentation/bot/modules
 
 Sub-menu: ثبت ورود امروز · ثبت خروج امروز · ویرایش ورود/خروج · ثبت فراموشی · گزارش هفتگی من · گزارش ماهانه من · بازگشت (today's figures are in the weekly report)
 
+**Days off.** Iran's official holidays (built-in calendar), Thursday and Friday are off; a person can have their own workdays, e.g. one who works Thursday (admin panel → user card → «📅 روزهای کاری»: toggle each day, «↩️ پیش‌فرض سازمان» to go back). Presence on a day off is all overtime (🌙 in the weekly report). Check-in reminders follow each person's workdays and skip holidays.
+
 **Entering a time.** In the forgotten-entry, manual-time and edit dialogs the time is picked on a keypad, one digit at a time (⌨️ `۱۴:۳_`): only digits that can come next are offered (first 0–2, then 0–9 or 0–3 after a 2, then 0–5, then 0–9), with «⌫» to delete one. Soroush accepts at most two buttons per row, so the four digit columns are filled in turn rather than side by side. Typing `HH:MM` works too.
 
 **Edit** («✏️ ویرایش ورود/خروج»). Pick a day (today or up to `max_manual_correction_age_days` back) → the day's registered times are shown → choose the check-in or check-out to change → new time → review (old ← new) → confirm. Same checks as a forgotten entry (not in the future, check-out after check-in, maximum shift, neighbouring days). The record gets source `USER_EDIT` (✏️), and the change, with the previous value, goes into `attendance_manual_corrections` and the audit log. A day with nothing registered points to «ثبت فراموشی».
