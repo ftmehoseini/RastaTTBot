@@ -11,6 +11,7 @@ from typing import Protocol
 
 from app.core.config.policy import AttendancePolicy
 from app.domain.attendance.models import DayStatus
+from app.domain.attendance.timesheet import SheetDay, sheet_day
 from app.domain.users.models import SCHEDULE_HOURLY
 
 
@@ -47,6 +48,8 @@ class DailyCalculation:
     net_balance_minutes: int | None
     # Lateness inside the floating check-in window (تأخیر مجاز). late_minutes is the unauthorized part.
     floating_late_minutes: int = 0
+    # Presence inside the official window (کارکرد عادی, column K of the timesheet)
+    normal_minutes: int = 0
     # Hourly staff: only check-in, check-out and worked minutes apply
     hourly: bool = False
 
@@ -156,17 +159,11 @@ class StandardDeductionPolicy:
 
 
 class FloatingWindowPolicy:
-    """Floating check-in window, fixed end time and overtime by duration.
+    """The organization's timesheet: the same formulas as its Excel workbook (see timesheet.py).
 
-        floating_late = min(check_in, floating_until) - start      (تأخیر مجاز, not deducted)
-        late          = max(0, check_in - floating_until)          (تأخیر غیرمجاز)
-        early         = max(0, end - check_out)                    (تعجیل)
-        gross         = check_out - check_in
-        raw = net     = gross - required
-        overtime      = round_down(max(0, raw))                    (اضافه‌کار)
-        deficit       = max(0, -raw)
-
-    The grace settings (allowed_late/early) are subtracted as in the standard policy.
+    floating_late = L تاخیر مجاز       late  = M تاخیر غیر مجاز     early = N تعجیل
+    normal        = K کارکرد عادی       gross = J ساعت مفید          overtime = O اضافه کار
+    deficit       = required - K: the part of the official window the person was not there
     """
 
     name = "floating_window"
@@ -184,13 +181,14 @@ class FloatingWindowPolicy:
         if check_in is None and check_out is None:
             # Absent and non-working days look the same as in the standard policy.
             return StandardDeductionPolicy().calculate(schedule, None, None)
-        floating, late = self._lateness(schedule, check_in) if check_in else (0, 0)
         if check_in is None or check_out is None:
+            # Incomplete: only the lateness of a registered check-in is known yet.
+            day = self.sheet_day(schedule, check_in, None) if check_in else None
             return DailyCalculation(
                 status=DayStatus.MISSING_CHECK_OUT if check_out is None else DayStatus.MISSING_CHECK_IN,
                 gross_worked_minutes=None,
-                late_minutes=late,
-                floating_late_minutes=floating,
+                late_minutes=day.late if day else 0,
+                floating_late_minutes=day.floating_late if day else 0,
                 early_departure_minutes=0,
                 raw_balance_minutes=None,
                 overtime_minutes=0,
@@ -198,32 +196,42 @@ class FloatingWindowPolicy:
                 net_balance_minutes=None,
                 **base,
             )
-        gross = _minutes_between(check_in, check_out)
-        raw = gross - schedule.required_minutes
+        day = self.sheet_day(schedule, check_in, check_out)
+        raw = day.useful - schedule.required_minutes
         return DailyCalculation(
             status=DayStatus.COMPLETE,
-            gross_worked_minutes=gross,
-            late_minutes=late,
-            floating_late_minutes=floating,
-            early_departure_minutes=StandardDeductionPolicy._early(schedule, check_in.date(), check_out),
+            gross_worked_minutes=day.useful,
+            normal_minutes=day.normal,
+            late_minutes=day.late,
+            floating_late_minutes=day.floating_late,
+            early_departure_minutes=day.early,
             raw_balance_minutes=raw,
-            overtime_minutes=round_down(raw, schedule.overtime_rounding_minutes),
-            deficit_minutes=max(0, -raw),
+            overtime_minutes=day.overtime,
+            deficit_minutes=max(0, schedule.required_minutes - day.normal),
             net_balance_minutes=raw,
             **base,
         )
 
     @staticmethod
-    def _lateness(schedule: WorkSchedule, check_in: datetime) -> tuple[int, int]:
-        """(allowed floating lateness, unauthorized lateness) in minutes."""
-        if not schedule.is_workday:
-            return 0, 0
-        day, tz = check_in.date(), check_in.tzinfo
-        start = datetime.combine(day, schedule.start, tzinfo=tz)
-        until = datetime.combine(day, schedule.floating_until or schedule.start, tzinfo=tz)
-        floating = max(0, _minutes_between(start, min(check_in, until)))
-        late = max(0, _minutes_between(until, check_in) - schedule.allowed_late_minutes)
-        return floating, late
+    def sheet_day(schedule: WorkSchedule, check_in: datetime | None, check_out: datetime | None) -> SheetDay:
+        """Run the timesheet formulas on minutes after midnight of the work date."""
+        anchor = check_in or check_out
+        assert anchor is not None
+        midnight = datetime.combine(anchor.date(), time(0, 0), tzinfo=anchor.tzinfo)
+
+        def minutes(value: datetime | None) -> int | None:
+            return _minutes_between(midnight, value) if value else None
+
+        def clock(value: time) -> int:
+            return value.hour * 60 + value.minute
+
+        return sheet_day(
+            minutes(check_in),
+            minutes(check_out),
+            clock(schedule.start),
+            clock(schedule.floating_until or schedule.start),
+            clock(schedule.end),
+        )
 
 
 class HourlyPolicy:

@@ -77,7 +77,7 @@ async def test_check_out_computes_summary_and_blocks_duplicates(services, make_u
     assert result.calculation.gross_worked_minutes == 530
     summary = (await services.session.execute(select(AttendanceDailySummary))).scalar_one()
     assert summary.status == DayStatus.COMPLETE
-    assert summary.overtime_minutes == 2  # 530 worked - 528 official, no rounding
+    assert summary.overtime_minutes == 52  # in 08:50, out 17:40: presence after 16:48
     assert summary.floating_late_minutes == 50
     clock.advance(minutes=5)
     preview = await services.attendance.preview_check_out(user)
@@ -228,7 +228,7 @@ async def test_weekly_report_marks_absent_days_and_totals(services, make_user, c
     assert statuses[date(2026, 10, 18)] == DayStatus.ABSENT
     assert MONDAY not in statuses  # today without a record is not shown yet
     assert report.totals.present_days == 1 and report.totals.absent_days == 1
-    assert report.totals.overtime_minutes == 12  # 540 worked - 528 official
+    assert report.totals.overtime_minutes == 72  # 09:00–18:00: presence after 16:48
     assert report.totals.floating_late_minutes == 60
     assert report.rows[0].is_manual
 

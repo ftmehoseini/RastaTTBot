@@ -134,25 +134,48 @@ def test_floating_on_time(floating: AttendancePolicy) -> None:
 
 
 def test_floating_arrival_inside_window_is_allowed(floating: AttendancePolicy) -> None:
-    # In 09:00, out 17:48 → 1 h allowed lateness, full 8:48 worked, no early departure, no overtime
+    # In 09:00, out 17:48 → 1 h allowed lateness; presence after 16:48 is overtime and the missed
+    # 08:00–09:00 is a deficit, exactly as in the organization's Excel timesheet.
     c = fcalc(floating, tehran(2026, 10, 19, 9, 0), tehran(2026, 10, 19, 17, 48))
     assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (60, 0, 0)
-    assert (c.gross_worked_minutes, c.overtime_minutes, c.deficit_minutes) == (528, 0, 0)
+    assert (c.gross_worked_minutes, c.normal_minutes, c.overtime_minutes, c.deficit_minutes) == (528, 468, 60, 60)
 
 
 def test_floating_unauthorized_late_and_early(floating: AttendancePolicy) -> None:
     # In 09:45, out 16:30 → 1:30 allowed, 0:15 unauthorized, 0:18 early, worked 6:45
     c = fcalc(floating, tehran(2026, 10, 19, 9, 45), tehran(2026, 10, 19, 16, 30))
     assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (90, 15, 18)
-    assert (c.gross_worked_minutes, c.overtime_minutes, c.deficit_minutes) == (405, 0, 123)
-    assert c.net_balance_minutes == -123
+    assert (c.gross_worked_minutes, c.normal_minutes, c.overtime_minutes, c.deficit_minutes) == (405, 405, 0, 123)
 
 
-def test_floating_overtime_is_time_beyond_the_official_day(floating: AttendancePolicy) -> None:
-    # In 07:30, out 18:00 → worked 10:30, overtime 1:42 even with the early arrival
+def test_floating_overtime_is_presence_outside_the_official_window(floating: AttendancePolicy) -> None:
+    # In 07:30, out 18:00 → 30 min before 08:00 + 72 min after 16:48
     c = fcalc(floating, tehran(2026, 10, 19, 7, 30), tehran(2026, 10, 19, 18, 0))
     assert (c.floating_late_minutes, c.late_minutes, c.early_departure_minutes) == (0, 0, 0)
-    assert c.overtime_minutes == 102
+    assert (c.normal_minutes, c.overtime_minutes, c.deficit_minutes) == (528, 102, 0)
+
+
+@pytest.mark.parametrize(
+    ("check_in", "check_out", "expected"),
+    [
+        # Rows of the organization's own timesheet: (J, K, L, M, N, O) as Excel calculated them
+        ((8, 38), (17, 6), (508, 490, 38, 0, 0, 18)),
+        ((11, 34), (19, 0), (446, 314, 90, 124, 0, 132)),
+        ((9, 25), (16, 27), (422, 422, 85, 0, 21, 0)),
+        ((8, 50), (18, 45), (595, 478, 50, 0, 0, 117)),
+    ],
+)
+def test_matches_the_excel_timesheet(floating: AttendancePolicy, check_in, check_out, expected) -> None:
+    c = fcalc(floating, tehran(2026, 10, 19, *check_in), tehran(2026, 10, 19, *check_out))
+    got = (
+        c.gross_worked_minutes,
+        c.normal_minutes,
+        c.floating_late_minutes,
+        c.late_minutes,
+        c.early_departure_minutes,
+        c.overtime_minutes,
+    )
+    assert got == expected
 
 
 def test_floating_missing_check_out_still_shows_lateness(floating: AttendancePolicy) -> None:
@@ -161,10 +184,12 @@ def test_floating_missing_check_out_still_shows_lateness(floating: AttendancePol
     assert (c.floating_late_minutes, c.late_minutes) == (90, 30)
 
 
-def test_floating_non_workday_and_absence(floating: AttendancePolicy) -> None:
+def test_floating_non_workday_uses_the_same_formulas_and_absence(floating: AttendancePolicy) -> None:
+    # The Excel formulas do not look at the weekday, so neither does the bot (Friday 10:00–12:00).
     schedule = ScheduleResolver(floating, set()).for_day(FRIDAY)
     c = FloatingWindowPolicy().calculate(schedule, tehran(2026, 10, 23, 10, 0), tehran(2026, 10, 23, 12, 0))
-    assert (c.floating_late_minutes, c.late_minutes, c.overtime_minutes) == (0, 0, 120)
+    assert (c.floating_late_minutes, c.late_minutes, c.normal_minutes, c.overtime_minutes) == (90, 30, 120, 0)
+    assert c.deficit_minutes == 0  # nothing is required on a Friday
     absent = fcalc(floating, None, None)
     assert absent.status == DayStatus.ABSENT and absent.deficit_minutes == 528
 
