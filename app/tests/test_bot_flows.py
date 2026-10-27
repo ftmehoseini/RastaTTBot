@@ -18,7 +18,7 @@ from app.core.security.rbac import RoleCode
 from app.core.utils.clock import TimeService
 from app.infrastructure.excel.menu_parser import parse_menu
 from app.infrastructure.integrations.messenger import AiogramMessenger
-from app.presentation.bot.callbacks.data import AdminCb, AttCb, CalCb, CorrCb, FoodCb, LeaveCb, NavCb
+from app.presentation.bot.callbacks.data import AdminCb, AttCb, CalCb, CorrCb, FoodCb, KeyCb, LeaveCb, NavCb
 from app.presentation.bot.dispatcher import build_dispatcher
 from app.tests.conftest import add_roster, roster_code, tehran
 from app.tests.test_food import VALID_ROWS, menu_file
@@ -339,6 +339,66 @@ async def test_forgotten_entry_is_for_earlier_days_and_marked_differently(bot: H
     week = bot.last_text(EMP)
     assert "یکشنبه ۲۶ مهر ۱۴۰۵ 📝" in week and "دوشنبه ۲۷ مهر ۱۴۰۵ ✍️" in week
     assert "✍️ = ثبت دستی امروز | 📝 = ثبت فراموشی" in week
+
+
+async def test_time_keypad_digit_by_digit(bot: Harness, clock) -> None:
+    from app.infrastructure.integrations.messenger import set_max_buttons_per_row
+
+    set_max_buttons_per_row(2)  # Soroush
+    try:
+        await bot.register(EMP, "مریم کریمی")
+        clock.set(tehran(2026, 10, 19, 12, 0))
+        await bot.press(EMP, AttCb(a="forgot").pack())
+        await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 18).toordinal()).pack())
+        await bot.press(EMP, "cor:kind:in")
+        assert "⌨️ __:__" in bot.last_text(EMP)
+        assert [b for b in bot.buttons(EMP) if b.startswith("kp:")] == ["kp:corr::d:0", "kp:corr::d:1", "kp:corr::d:2"]
+        await bot.press(EMP, "kp:corr::d:0")
+        await bot.press(EMP, "kp:corr:0:d:8")
+        assert "⌨️ ۰۸:__" in bot.last_text(EMP)
+        assert "kp:corr:08:d:6" not in bot.buttons(EMP)  # minutes start with 0–5
+        backspace = KeyCb(p="corr", v="08", a="del").pack()
+        assert backspace in bot.buttons(EMP)
+        await bot.press(EMP, backspace)
+        assert "⌨️ ۰_:__" in bot.last_text(EMP)
+        await bot.press(EMP, "kp:corr:0:d:9")
+        await bot.press(EMP, "kp:corr:09:d:4")
+        await bot.press(EMP, "kp:corr:094:d:5")
+        assert "مرور ثبت فراموشی" in bot.last_text(EMP) and "۰۹:۴۵" in bot.last_text(EMP)
+        await bot.press(EMP, "kp:corr:2:d:5")  # 25:.. is not offered: an old or forged button
+        assert any("منقضی" in a for a in bot.alerts())
+        assert bot.recorder.widest_row == 2
+    finally:
+        set_max_buttons_per_row(8)
+
+
+async def test_edit_a_registered_check_in(bot: Harness, clock) -> None:
+    await bot.register(EMP, "مریم کریمی")
+    clock.set(tehran(2026, 10, 19, 9, 45))
+    await bot.press(EMP, AttCb(a="in").pack())
+    await bot.press(EMP, next(b for b in bot.buttons(EMP) if b.startswith("att:in_ok")))
+    clock.set(tehran(2026, 10, 19, 12, 0))
+    await bot.text(EMP, "⏱ ورود و خروج")
+    assert AttCb(a="edit").pack() in bot.buttons(EMP)
+    await bot.press(EMP, AttCb(a="edit").pack())
+    assert CalCb(p="corr", a="d", v=date(2026, 10, 19).toordinal()).pack() in bot.buttons(EMP)  # today too
+    await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 18).toordinal()).pack())
+    assert "ثبت نشده که ویرایش شود" in bot.last_text(EMP)
+    await bot.press(EMP, CorrCb(a="back", k="date").pack())
+    await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 19).toordinal()).pack())
+    assert "ورود: ۰۹:۴۵ | خروج: ثبت نشده" in bot.last_text(EMP)
+    assert "cor:kind:out" not in bot.buttons(EMP)  # only what is registered can be edited
+    await bot.press(EMP, "cor:kind:in")
+    assert "ساعت جدید ورود" in bot.last_text(EMP)
+    await bot.text(EMP, "13:00")  # after now
+    assert "آینده" in bot.last_text(EMP)
+    await bot.text(EMP, "08:40")
+    assert "مرور ویرایش" in bot.last_text(EMP) and "۰۹:۴۵ ← ۰۸:۴۰" in bot.last_text(EMP)
+    await bot.press(EMP, CorrCb(a="ok").pack())
+    assert "ویرایش شد" in bot.last_text(EMP)
+    await bot.press(EMP, AttCb(a="week").pack())
+    week = bot.last_text(EMP)
+    assert "دوشنبه ۲۷ مهر ۱۴۰۵ ✏️" in week and "ورود ۰۸:۴۰" in week and "✏️ = ویرایش‌شده" in week
 
 
 async def test_leave_wizard_previous_step(bot: Harness, clock) -> None:

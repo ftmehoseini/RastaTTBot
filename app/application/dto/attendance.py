@@ -37,6 +37,15 @@ class CorrectionInput:
 
 
 @dataclass(frozen=True)
+class EditInput:
+    """Change an already registered check-in or check-out."""
+
+    work_date: date
+    kind: str  # "in" | "out"
+    new_time: time
+
+
+@dataclass(frozen=True)
 class CorrectionResult:
     correction_id: UUID
     status: CorrectionStatus

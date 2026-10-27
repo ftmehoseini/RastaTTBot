@@ -304,3 +304,35 @@ async def test_month_report_follows_the_excel_summary(services, make_user, clock
     assert m.final_work == round(m.normal + 72 + 120 - 126 * 1.6)
     row = next(r for r in month.rows if r.work_date == date(2026, 10, 18))
     assert row.paid_leave_minutes == 120 and "مرخصی ساعتی با حقوق" in row.leave_note
+
+
+async def test_edit_a_registered_time(services, make_user, clock) -> None:
+    from app.application.dto.attendance import EditInput
+
+    user = await make_user()
+    clock.set(tehran(2026, 10, 19, 9, 45))
+    await punch_in(services, user, clock)
+    clock.set(tehran(2026, 10, 19, 17, 0))
+    await punch_out(services, user, clock)
+    clock.set(tehran(2026, 10, 19, 18, 0))
+    edit = services.attendance.edit_entry
+    with pytest.raises(ValidationError):  # check-in after the check-out
+        await edit(user, EditInput(MONDAY, "in", time(17, 30)))
+    with pytest.raises(ValidationError):  # nothing changes
+        await edit(user, EditInput(MONDAY, "in", time(9, 45)))
+    with pytest.raises(ValidationError):  # in the future
+        await edit(user, EditInput(MONDAY, "out", time(19, 0)))
+    with pytest.raises(ConflictError):  # no record that day: that is a forgotten entry
+        await edit(user, EditInput(date(2026, 10, 18), "in", time(8, 0)))
+    with pytest.raises(ValidationError):  # too old
+        await edit(user, EditInput(MONDAY - timedelta(days=40), "in", time(8, 0)))
+
+    result = await edit(user, EditInput(MONDAY, "in", time(8, 40)))
+    assert result.record.check_in_source == RecordSource.USER_EDIT
+    assert services.time.to_local(result.record.check_in_at).strftime("%H:%M") == "08:40"
+    summary = (await services.session.execute(select(AttendanceDailySummary))).scalar_one()
+    assert (summary.late_minutes, summary.floating_late_minutes) == (0, 40)  # recalculated
+    trail = (await services.session.execute(select(AttendanceManualCorrection))).scalar_one()
+    assert services.time.to_local(trail.previous_check_in_at).strftime("%H:%M") == "09:45"  # history kept
+    week = await services.attendance.my_week(user)
+    assert week.rows[-1].is_edited

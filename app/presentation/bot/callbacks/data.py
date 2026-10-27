@@ -37,6 +37,15 @@ class TimeCb(CallbackData, prefix="tm"):
     m: int = 0
 
 
+class KeyCb(CallbackData, prefix="kp"):
+    """Digit keypad for HH:MM: the digits typed so far travel in the button itself."""
+
+    p: str  # purpose, e.g. corr
+    v: str = ""  # digits so far, 0–3 of them
+    a: str = "d"  # d (digit) | del (backspace)
+    d: int = 0
+
+
 class LeaveCb(CallbackData, prefix="lv"):
     a: str  # new | pay | unit | back | skip_reason | submit | mine | status | view | cancel
     v: str = ""

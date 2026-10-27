@@ -12,6 +12,7 @@ from app.application.dto.attendance import (
     CorrectionInput,
     CorrectionResult,
     DayRow,
+    EditInput,
     EmployeeReport,
     PunchPreview,
     PunchResult,
@@ -346,6 +347,111 @@ class AttendanceService:
         self._validate_correction(data, now, current_in, current_out, new_in, new_out)
         await self._validate_neighbours(user.id, data.work_date, new_in, new_out)
         return _CorrectionPlan(record, now, needs_in, needs_out, current_in, current_out, new_in, new_out)
+
+    # --- editing a registered time ---------------------------------------------------------------
+
+    def edit_date_window(self) -> tuple[date, date]:
+        today = self.time.today()
+        return today - timedelta(days=self.policy.max_manual_correction_age_days), today
+
+    async def validate_edit(self, user: User, data: EditInput) -> tuple[datetime, datetime]:
+        """(previous, new) UTC time of the edited check-in/out, or a Persian error."""
+        access.require(user, Permission.ATTENDANCE_SELF)
+        _, previous, new = await self._plan_edit(user, data, for_update=False)
+        return previous, new
+
+    async def edit_entry(self, user: User, data: EditInput) -> CorrectionResult:
+        access.require(user, Permission.ATTENDANCE_SELF)
+        record, previous, new = await self._plan_edit(user, data, for_update=True)
+        kind = CorrectionType.CHECK_IN if data.kind == "in" else CorrectionType.CHECK_OUT
+        status = (
+            CorrectionStatus.PENDING_APPROVAL
+            if self.policy.manual_correction_requires_approval
+            else CorrectionStatus.APPLIED
+        )
+        now = self.time.now_utc()
+        correction = self.records.add_correction(
+            AttendanceManualCorrection(
+                record_id=record.id,
+                user_id=user.id,
+                work_date=data.work_date,
+                correction_type=kind,
+                claimed_check_in_at=new if data.kind == "in" else None,
+                claimed_check_out_at=new if data.kind == "out" else None,
+                previous_check_in_at=ensure_utc(record.check_in_at) if record.check_in_at else None,
+                previous_check_out_at=ensure_utc(record.check_out_at) if record.check_out_at else None,
+                reason="edit",
+                status=status,
+                submitted_by=user.id,
+                submitted_at=now,
+            )
+        )
+        if status == CorrectionStatus.APPLIED:
+            if data.kind == "in":
+                record.check_in_at, record.check_in_source = new, RecordSource.USER_EDIT
+            else:
+                record.check_out_at, record.check_out_source = new, RecordSource.USER_EDIT
+            record.updated_by = user.id
+        await self.session.flush()
+        self.audit.record(
+            AuditAction.ATTENDANCE_MANUAL_CORRECTION,
+            "attendance_record",
+            record.id,
+            user.id,
+            {
+                "correction_id": str(correction.id),
+                "edit": data.kind,
+                "work_date": data.work_date.isoformat(),
+                "previous": previous.isoformat(),
+                "new": new.isoformat(),
+                "status": status.value,
+            },
+        )
+        if status == CorrectionStatus.APPLIED:
+            await self._refresh_summary(user, record)
+        await self.session.commit()
+        in_at = new if data.kind == "in" else record.check_in_at
+        out_at = new if data.kind == "out" else record.check_out_at
+        return CorrectionResult(
+            correction_id=correction.id,
+            status=status,
+            record=record,
+            check_in_local=self.time.to_local(in_at) if in_at else None,
+            check_out_local=self.time.to_local(out_at) if out_at else None,
+        )
+
+    async def _plan_edit(
+        self, user: User, data: EditInput, for_update: bool
+    ) -> tuple[AttendanceRecord, datetime, datetime]:
+        earliest, latest = self.edit_date_window()
+        if not earliest <= data.work_date <= latest:
+            raise ValidationError(
+                f"ویرایش فقط برای امروز و {self.policy.max_manual_correction_age_days} روز گذشته امکان‌پذیر است."
+            )
+        label = "ورود" if data.kind == "in" else "خروج"
+        record = await self.records.get_for_day(user.id, data.work_date, for_update=for_update)
+        current_in = ensure_utc(record.check_in_at) if record and record.check_in_at else None
+        current_out = ensure_utc(record.check_out_at) if record and record.check_out_at else None
+        previous = current_in if data.kind == "in" else current_out
+        if record is None or previous is None:
+            raise ConflictError(f"برای این روز {label}ی ثبت نشده که ویرایش شود. از «ثبت فراموشی» استفاده کنید.")
+        new = self.time.local_to_utc(data.work_date, data.new_time)
+        # A check-out clock time earlier than the check-in means the shift crossed midnight.
+        if data.kind == "out" and current_in is not None and new <= current_in:
+            new = self.time.local_to_utc(data.work_date + timedelta(days=1), data.new_time)
+        if new == previous:
+            raise ValidationError(f"همین ساعت از قبل برای {label} ثبت است.")
+        if new > self.time.now_utc() + _CLOCK_SKEW and not self.policy.allow_future_manual_correction:
+            raise ValidationError("زمان واردشده در آینده است.")
+        new_in = new if data.kind == "in" else current_in
+        new_out = new if data.kind == "out" else current_out
+        if new_in and new_out:
+            if new_out <= new_in:
+                raise ValidationError("ساعت خروج باید بعد از ساعت ورود باشد.")
+            if new_out - new_in > self.max_shift:
+                raise ValidationError(f"مدت حضور نمی‌تواند بیشتر از {self.policy.max_shift_hours} ساعت باشد.")
+        await self._validate_neighbours(user.id, data.work_date, new_in, new_out)
+        return record, previous, new
 
     def _validate_correction(
         self,

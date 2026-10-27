@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardMarkup
 
 from app.core.utils.jalali import month_name, to_jalali, weekday_name
 from app.core.utils.text import to_persian_digits
-from app.presentation.bot.callbacks.data import CalCb, TimeCb
+from app.presentation.bot.callbacks.data import CalCb, KeyCb, TimeCb
 from app.presentation.bot.keyboards.common import button, chunk, inline, step_row
 
 # A compact day list instead of a 7-column month grid: Bale/Soroush clients fail to render wide
@@ -55,6 +55,40 @@ def calendar_for(
         # Near the end of the window (e.g. past dates for corrections): show the days up to anchor.
         anchor = max(min_date, anchor - timedelta(days=PAGE_DAYS - 1))
     return day_page(purpose, anchor, min_date, max_date, back)
+
+
+def keypad_digits(typed: str) -> list[int]:
+    """The digits that can come next in a 24-hour HH:MM time."""
+    position = len(typed)
+    if position == 0:
+        return [0, 1, 2]
+    if position == 1:
+        return list(range(4)) if typed == "2" else list(range(10))
+    if position == 2:
+        return list(range(6))
+    if position == 3:
+        return list(range(10))
+    return []
+
+
+def keypad_display(typed: str) -> str:
+    """'14:3_' for the digits typed so far."""
+    padded = (typed + "____")[:4]
+    return to_persian_digits(f"{padded[:2]}:{padded[2:]}")
+
+
+def time_keypad(purpose: str, typed: str, back: str | None = None) -> InlineKeyboardMarkup:
+    """Pick the four digits of HH:MM one at a time; only valid digits are offered.
+
+    A grid of four 0–9 columns would need rows of four buttons, which Soroush rejects (two per
+    row at most), so the columns are filled in turn instead.
+    """
+    digits = [button(to_persian_digits(d), KeyCb(p=purpose, v=typed, d=d).pack()) for d in keypad_digits(typed)]
+    rows = chunk(digits, 5)
+    if typed:
+        rows.append([button("⌫ پاک کردن رقم", KeyCb(p=purpose, v=typed, a="del").pack())])
+    rows.append(step_row(back))
+    return inline(rows)
 
 
 def hour_picker(
