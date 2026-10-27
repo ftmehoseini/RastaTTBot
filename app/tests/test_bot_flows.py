@@ -181,13 +181,16 @@ async def test_check_in_and_out_through_buttons(bot: Harness, clock) -> None:
     await bot.press(EMP, AttCb(a="week").pack())
     week = bot.last_text(EMP)  # today is in the weekly report
     assert "گزارش هفتگی من" in week
-    for label in ("ورود", "خروج", "تعجیل", "تأخیر مجاز", "غیرمجاز", "اضافه‌کار"):
-        assert label in week
+    for label in ("ورود ۰۹:۰۳", "خروج ۱۷:۳۰", "تعجیل*", "تأخیر مجاز* ۱:۰۳", "غیرمجاز* ۰:۰۰", "اضافه‌کار ۰:۴۲"):
+        assert label in week, label
+    assert "ماه جاری تا امروز" in week and "* تأخیر غیرمجاز: ورود بعد از ۰۹:۳۰" in week
     await bot.press(EMP, AttCb(a="week_xls").pack())
     assert bot.documents(EMP)
     await bot.press(EMP, AttCb(a="month").pack())
     month = bot.last_text(EMP)
-    assert "گزارش ماهانه من" in month and "از سقف" in month and "مانده" in month
+    assert "گزارش ماهانه من" in month
+    for label in ("تأخیر مجاز", "تأخیر غیرمجاز", "قابل جبران", "غیرقابل جبران", "تعجیل", "اضافه‌کار", "کارکرد نهایی"):
+        assert label in month
     await bot.press(EMP, AttCb(a="month_xls").pack())
     assert len(bot.documents(EMP)) == 2
 

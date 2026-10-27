@@ -150,8 +150,9 @@ async def punch_manual(query: CallbackQuery, callback_data: AttCb, state: FSMCon
 @router.callback_query(AttCb.filter(F.a == "week"))
 async def weekly_report(query: CallbackQuery, services: Services, user: User) -> None:
     report = await services.attendance.my_week(user)
+    month = await services.attendance.my_month(user)
     markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="week_xls").pack())], back_row("att")])
-    await show(query, texts.employee_report(report), markup)
+    await show(query, texts.employee_report(report, month=month), markup)
 
 
 @router.callback_query(AttCb.filter(F.a == "month"))
@@ -159,7 +160,7 @@ async def monthly_report(query: CallbackQuery, services: Services, user: User) -
     report = await services.attendance.my_month(user)
     markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="month_xls").pack())], back_row("att")])
     # A whole month of day lines is too long for one message; the Excel file has the details.
-    await show(query, texts.employee_report(report, title="گزارش ماهانه من", with_days=False), markup)
+    await show(query, texts.monthly_report(report), markup)
 
 
 @router.callback_query(AttCb.filter(F.a.in_({"week_xls", "month_xls"})))

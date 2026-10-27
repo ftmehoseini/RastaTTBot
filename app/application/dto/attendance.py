@@ -4,6 +4,7 @@ from uuid import UUID
 
 from app.domain.attendance.calculation import DailyCalculation
 from app.domain.attendance.models import AttendanceRecord, CorrectionStatus, CorrectionType, RecordSource
+from app.domain.attendance.timesheet import SheetDay, SheetMonth, SheetRules
 
 
 @dataclass(frozen=True)
@@ -56,11 +57,27 @@ class DayRow:
     is_workday: bool
     correction_notes: list[str] = field(default_factory=list)
     is_today: bool = False
+    paid_leave_minutes: int = 0  # approved paid leave on this day (column I of the timesheet)
+    leave_note: str | None = None
+
+    @property
+    def sheet_day(self) -> SheetDay:
+        """This row as a row of the Excel timesheet."""
+        c = self.calculation
+        return SheetDay(
+            useful=c.gross_worked_minutes or 0,
+            normal=c.normal_minutes,
+            floating_late=c.floating_late_minutes,
+            late=c.late_minutes,
+            early=c.early_departure_minutes,
+            overtime=c.overtime_minutes,
+            paid_leave=self.paid_leave_minutes,
+        )
 
     @property
     def is_manual(self) -> bool:
-        """Any time not taken automatically (forgotten entry, today's manual time, admin edit)."""
-        return self.is_forgotten or self.is_manual_today
+        """Any time not taken automatically (forgotten entry, today's manual time, edit)."""
+        return self.is_forgotten or self.is_manual_today or self.is_edited
 
     @property
     def is_forgotten(self) -> bool:
@@ -70,6 +87,10 @@ class DayRow:
     @property
     def is_manual_today(self) -> bool:
         return RecordSource.MANUAL_TODAY in (self.check_in_source, self.check_out_source)
+
+    @property
+    def is_edited(self) -> bool:
+        return RecordSource.USER_EDIT in (self.check_in_source, self.check_out_source)
 
 
 @dataclass(frozen=True)
@@ -119,6 +140,10 @@ class EmployeeReport:
     late_cap_minutes: int = 0
     early_cap_minutes: int = 0
     hourly: bool = False
+    # The Excel timesheet's summary block for this period (None for hourly staff). The caps in it
+    # are monthly, so the compensable/uncompensated split is meaningful for whole-month reports.
+    sheet: SheetMonth | None = None
+    sheet_rules: SheetRules | None = None
 
 
 @dataclass(frozen=True)

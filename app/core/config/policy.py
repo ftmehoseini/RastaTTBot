@@ -63,6 +63,10 @@ class AttendancePolicy(BaseModel):
     # Monthly caps shown in month reports (0 = no cap)
     monthly_unauthorized_late_cap_minutes: int = Field(default=0, ge=0)
     monthly_early_departure_cap_minutes: int = Field(default=0, ge=0)
+    # کارکرد نهایی = normal + MIN(overtime, compensable) + paid leave
+    #               + overtime surplus × surplus factor − uncompensated × penalty factor
+    final_work_surplus_factor: float = Field(default=0.8, ge=0)
+    final_work_penalty_factor: float = Field(default=1.6, ge=0)
     max_shift_hours: int = Field(default=16, ge=1, le=24)
     allow_checkout_without_checkin: bool = False
     live_confirmation_ttl_seconds: int = Field(default=300, ge=10)

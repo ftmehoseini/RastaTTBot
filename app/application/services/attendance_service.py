@@ -1,5 +1,6 @@
 """Attendance rules: live check-in/out, forgotten-entry corrections, daily calculation and reports."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from uuid import UUID
@@ -31,6 +32,7 @@ from app.core.utils.jalali import (
     month_range,
     week_range,
 )
+from app.core.utils.text import format_minutes
 from app.domain.attendance.calculation import (
     HOURLY_POLICY,
     DailyCalculation,
@@ -46,8 +48,9 @@ from app.domain.attendance.models import (
     DayStatus,
     RecordSource,
 )
+from app.domain.attendance.timesheet import SheetRules, sheet_month
 from app.domain.audit.models import AuditAction
-from app.domain.leave.models import LeaveStatus, LeaveUnit
+from app.domain.leave.models import LeavePayType, LeaveRequest, LeaveStatus, LeaveUnit
 from app.domain.users.models import User
 from app.infrastructure.repositories.attendance import AttendanceRepository
 from app.infrastructure.repositories.audit import AuditRepository
@@ -78,6 +81,7 @@ class AttendanceService:
     def __init__(self, session: AsyncSession, policy: Policy, time: TimeService):
         self.session = session
         self.policy = policy.attendance
+        self.leave_policy = policy.leave
         self.time = time
         self.records = AttendanceRepository(session)
         self.users = UserRepository(session)
@@ -422,10 +426,27 @@ class AttendanceService:
 
     # --- reports -----------------------------------------------------------------------
 
+    @property
+    def sheet_rules(self) -> SheetRules:
+        def clock(value: time) -> int:
+            return value.hour * 60 + value.minute
+
+        p = self.policy
+        return SheetRules(
+            floating_start=clock(p.standard_start_time),
+            floating_end=clock(p.floating_check_in_until or p.standard_start_time),
+            allowed_exit=clock(p.standard_end_time),
+            late_cap=p.monthly_unauthorized_late_cap_minutes,
+            early_cap=p.monthly_early_departure_cap_minutes,
+            surplus_factor=p.final_work_surplus_factor,
+            penalty_factor=p.final_work_penalty_factor,
+        )
+
     async def employee_report(self, user: User, start: date, end: date) -> EmployeeReport:
         records = await self.records.list_between(start, end, user.id)
         corrections = await self.records.corrections_between(start, end, user.id)
-        return self._build_report(user, start, end, records, corrections)
+        leaves = await self.leaves.list_filtered(start=start, end=end, statuses={LeaveStatus.APPROVED}, user_id=user.id)
+        return self._build_report(user, start, end, records, corrections, leaves)
 
     async def my_week(self, user: User) -> EmployeeReport:
         access.require(user, Permission.ATTENDANCE_SELF)
@@ -450,11 +471,13 @@ class AttendanceService:
             users = await self.users.list_active_employees()
         records = await self.records.list_between(start, end)
         corrections = await self.records.corrections_between(start, end)
+        leaves = await self.leaves.list_filtered(start=start, end=end, statuses={LeaveStatus.APPROVED})
         reports = []
         for u in users:
             mine = [r for r in records if r.user_id == u.id]
             mine_corr = [c for c in corrections if c.user_id == u.id]
-            reports.append(self._build_report(u, start, end, mine, mine_corr))
+            mine_leave = [lv for lv in leaves if lv.user_id == u.id]
+            reports.append(self._build_report(u, start, end, mine, mine_corr, mine_leave))
         self.audit.record(
             AuditAction.REPORT_GENERATED,
             "attendance_report",
@@ -485,9 +508,11 @@ class AttendanceService:
         end: date,
         records: list[AttendanceRecord],
         corrections: list[AttendanceManualCorrection],
+        leaves: Iterable[LeaveRequest] = (),
     ) -> EmployeeReport:
         today = self.time.today()
         by_date = {r.work_date: r for r in records}
+        leave_by_day = self._leave_by_day(leaves, start, end)
         notes: dict[date, list[str]] = {}
         for c in corrections:
             submitted = format_datetime(self.time.to_local(c.submitted_at))
@@ -515,10 +540,22 @@ class AttendanceService:
                     is_workday=is_workday,
                     correction_notes=notes.get(day, []),
                     is_today=day == today,
+                    paid_leave_minutes=leave_by_day.get(day, (0, None))[0],
+                    leave_note=leave_by_day.get(day, (0, None))[1],
                 )
             )
+        sheet = None if user.is_hourly else sheet_month((r.sheet_day for r in rows), self.sheet_rules)
         report = EmployeeReport(
-            user.id, user.full_name, user.messenger_user_id, start, end, rows, Totals.of(rows), hourly=user.is_hourly
+            user.id,
+            user.full_name,
+            user.messenger_user_id,
+            start,
+            end,
+            rows,
+            Totals.of(rows),
+            hourly=user.is_hourly,
+            sheet=sheet,
+            sheet_rules=None if user.is_hourly else self.sheet_rules,
         )
         # Monthly caps only make sense for full-time staff and a report covering exactly one Jalali month.
         if not user.is_hourly and (start, end) == month_range(start):
@@ -528,6 +565,30 @@ class AttendanceService:
                 early_cap_minutes=self.policy.monthly_early_departure_cap_minutes,
             )
         return report
+
+    def _leave_by_day(self, leaves: Iterable[LeaveRequest], start: date, end: date) -> dict[date, tuple[int, str]]:
+        """Approved leave per day: (paid minutes for column I of the timesheet, note)."""
+        result: dict[date, tuple[int, str]] = {}
+        for lv in leaves:
+            paid = lv.pay_type == LeavePayType.PAID
+            kind = "با حقوق" if paid else "بدون حقوق"
+            if lv.unit == LeaveUnit.HOURLY:
+                minutes = lv.duration_minutes or 0
+                label = f"مرخصی ساعتی {kind} {format_minutes(minutes)}"
+                days = [lv.start_date] if start <= lv.start_date <= end else []
+            else:
+                minutes = self.policy.standard_workday_minutes
+                label = f"مرخصی روزانه {kind}"
+                days = [
+                    d
+                    for d in iter_days(max(start, lv.start_date), min(end, lv.end_date))
+                    if self.leave_policy.count_non_workdays_in_daily_leave or self.schedules.is_workday(d)
+                ]
+            for d in days:
+                old_minutes, old_note = result.get(d, (0, ""))
+                note = f"{old_note} | {label}" if old_note else label
+                result[d] = (old_minutes + (minutes if paid else 0), note)
+        return result
 
     # --- reminders ---------------------------------------------------------------------
 

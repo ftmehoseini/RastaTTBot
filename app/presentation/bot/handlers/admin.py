@@ -112,8 +112,10 @@ async def _send_attendance(
     reports = await services.attendance.team_reports(user, start, end, user_id)
     await query.answer("در حال آماده‌سازی گزارش…")
     message = query_message(query)
+    whole_month = (start, end) == month_range(start)
     if user_id is not None and reports:
-        await message.answer(att_texts.employee_report(reports[0], title))
+        render = att_texts.monthly_report if whole_month else att_texts.employee_report
+        await message.answer(render(reports[0], title))
     else:
         summary = services.attendance.team_summary(reports, start, end)
         await message.answer(att_texts.team_summary(summary, title))

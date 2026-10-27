@@ -26,6 +26,9 @@ attendance:
   # Monthly caps: unauthorized lateness 7 h, early departure (تعجیل) 3 h. 0 = no cap
   monthly_unauthorized_late_cap_minutes: 420
   monthly_early_departure_cap_minutes: 180
+  # کارکرد نهایی of the Excel timesheet: + overtime surplus × 0.8 − uncompensated lateness × 1.6
+  final_work_surplus_factor: 0.8
+  final_work_penalty_factor: 1.6
   check_in_reminder_time: "10:00"
   check_out_reminder_time: "20:00"
   # Reminders still go out if the scheduler was down at the exact time, within this window

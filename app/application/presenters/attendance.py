@@ -7,6 +7,7 @@ from app.core.utils.jalali import format_date, format_date_numeric, format_time
 from app.core.utils.text import format_minutes, to_persian_digits
 from app.domain.attendance.calculation import DailyCalculation
 from app.domain.attendance.models import CorrectionType, DayStatus
+from app.domain.attendance.timesheet import SheetMonth, SheetRules
 
 CORRECTION_TYPE_FA = {
     CorrectionType.CHECK_IN: "ورود",
@@ -58,19 +59,20 @@ def _day_line(row: DayRow) -> str:
     c = row.calculation
     head = f"▫️ {format_date(row.work_date)}"
     if c.status == DayStatus.ABSENT:
-        return f"{head}\n   ❗️ بدون ثبت ورود و خروج"
+        return f"{head}\n   🌴 {row.leave_note}" if row.leave_note else f"{head}\n   ❗️ بدون ثبت ورود و خروج"
     check_in = format_time(c.check_in) if c.check_in else "—"
     check_out = format_time(c.check_out) if c.check_out else "—"
     if c.check_in and c.check_out and c.check_out.date() != c.check_in.date():
         check_out += " (روز بعد)"
-    manual = (" ✍️" if row.is_manual_today else "") + (" 📝" if row.is_forgotten else "")
-    lines = [f"{head}{manual}", f"   ورود {check_in} | خروج {check_out}"]
+    marks = (
+        (" ✍️" if row.is_manual_today else "") + (" 📝" if row.is_forgotten else "") + (" ✏️" if row.is_edited else "")
+    )
+    lines = [f"{head}{marks}", f"   ورود {check_in} | خروج {check_out}"]
+    lateness = f"   تأخیر مجاز* {format_minutes(c.floating_late_minutes)} | غیرمجاز* {format_minutes(c.late_minutes)}"
     if c.status == DayStatus.MISSING_CHECK_OUT and row.is_today:
         lines.append("   ⏳ امروز — در حال کار")
         if not c.hourly:
-            lines.append(
-                f"   تأخیر مجاز {format_minutes(c.floating_late_minutes)} | غیرمجاز {format_minutes(c.late_minutes)}"
-            )
+            lines.append(lateness)
     elif c.status == DayStatus.MISSING_CHECK_OUT:
         lines.append("   ⚠️ خروج ثبت نشده")
     elif c.status == DayStatus.MISSING_CHECK_IN:
@@ -78,14 +80,12 @@ def _day_line(row: DayRow) -> str:
     elif c.hourly:
         lines.append(f"   کارکرد {format_minutes(c.gross_worked_minutes)}")
     else:
+        lines.append(f"{lateness} | تعجیل* {format_minutes(c.early_departure_minutes)}")
         lines.append(
-            f"   تعجیل {format_minutes(c.early_departure_minutes)} | تأخیر مجاز {format_minutes(c.floating_late_minutes)}"
-            f" | غیرمجاز {format_minutes(c.late_minutes)}"
+            f"   اضافه‌کار {format_minutes(c.overtime_minutes)} | کارکرد عادی {format_minutes(c.normal_minutes)}"
         )
-        lines.append(
-            f"   اضافه‌کار {format_minutes(c.overtime_minutes)} | کارکرد {format_minutes(c.gross_worked_minutes)}"
-            f" | کسری {format_minutes(c.deficit_minutes)}"
-        )
+    if row.leave_note:
+        lines.append(f"   🌴 {row.leave_note}")
     return "\n".join(lines)
 
 
@@ -95,21 +95,66 @@ def _legend(report: EmployeeReport) -> list[str]:
         marks.append("✍️ = ثبت دستی امروز")
     if any(r.is_forgotten for r in report.rows):
         marks.append("📝 = ثبت فراموشی")
+    if any(r.is_edited for r in report.rows):
+        marks.append("✏️ = ویرایش‌شده")
     return ["\n" + " | ".join(marks)] if marks else []
 
 
-def _with_cap(label: str, used: int, cap: int) -> str:
-    """'تعجیل: ۱:۲۰ از سقف ۳:۰۰ (مانده ۱:۴۰)', or the overrun when the cap is passed."""
-    line = f"{label}: {format_minutes(used)}"
-    if not cap:
-        return line
-    line += f" از سقف {format_minutes(cap)}"
-    if used > cap:
-        return f"{line}\n   ⛔️ {format_minutes(used - cap)} بیش از سقف ماهانه"
-    return f"{line} (مانده {format_minutes(cap - used)})"
+def _footnote(rules: SheetRules) -> str:
+    return (
+        f"\n* تأخیر مجاز: ورود تا {_clock(rules.floating_end)} — قابل جبران با اضافه‌کار"
+        f"\n* تأخیر غیرمجاز: ورود بعد از {_clock(rules.floating_end)} — تا {format_minutes(rules.late_cap)} در ماه"
+        " قابل جبران، بیشتر از آن غیرقابل جبران"
+        f"\n* تعجیل: خروج قبل از {_clock(rules.allowed_exit)} — تا {format_minutes(rules.early_cap)} در ماه قابل جبران"
+    )
 
 
-def employee_report(report: EmployeeReport, title: str = "گزارش هفتگی من", with_days: bool = True) -> str:
+def _clock(minutes: int) -> str:
+    return to_persian_digits(f"{minutes // 60:02d}:{minutes % 60:02d}")
+
+
+def _split(label: str, used: int, cap: int) -> list[str]:
+    """'تأخیر غیرمجاز: ۸:۲۰' plus how much of it is compensable under the monthly cap."""
+    over = max(used - cap, 0)
+    lines = [f"{label}: {format_minutes(used)} (سقف ماهانه {format_minutes(cap)})"]
+    lines.append(f"   قابل جبران {format_minutes(used - over)} | غیرقابل جبران {format_minutes(over)}")
+    if over:
+        lines.append(f"   ⛔️ {format_minutes(over)} بیش از سقف ماهانه")
+    return lines
+
+
+def _month_figures(m: SheetMonth) -> list[str]:
+    """The Excel summary block, in the same terms."""
+    lines = [
+        f"کارکرد عادی: {format_minutes(m.normal)}",
+        f"تأخیر مجاز: {format_minutes(m.floating_late)}",
+        *_split("تأخیر غیرمجاز", m.late, m.late_cap),
+        *_split("تعجیل", m.early, m.early_cap),
+        f"اضافه‌کار: {format_minutes(m.overtime)}",
+    ]
+    if m.paid_leave:
+        lines.append(f"مرخصی با حقوق: {format_minutes(m.paid_leave)}")
+    lines += [
+        "",
+        "— محاسبه‌ی نهایی —",
+        f"تأخیر و تعجیل قابل جبران: {format_minutes(m.compensable)}",
+        f"اضافه‌کار مازاد بر نیاز: {format_minutes(m.overtime_surplus)}",
+        f"تأخیر و تعجیل جبران‌نشده: {format_minutes(m.uncompensated)}",
+        f"کارکرد نهایی: {format_minutes(m.final_work)}",
+    ]
+    return lines
+
+
+def _days_line(report: EmployeeReport) -> str:
+    t = report.totals
+    return (
+        f"روزهای کامل: {to_persian_digits(t.present_days)} | ناقص: {to_persian_digits(t.incomplete_days)}"
+        f" | غیبت: {to_persian_digits(t.absent_days)}"
+    )
+
+
+def employee_report(report: EmployeeReport, title: str = "گزارش هفتگی من", month: EmployeeReport | None = None) -> str:
+    """Weekly report: every day plus the week's totals and, when given, the month so far."""
     lines = [
         f"📊 {title}",
         f"{report.full_name}",
@@ -118,11 +163,10 @@ def employee_report(report: EmployeeReport, title: str = "گزارش هفتگی 
     ]
     if not report.rows:
         lines.append("در این بازه رکوردی ثبت نشده است.")
-    if with_days:
-        lines.extend(_day_line(r) for r in report.rows)
-        lines.append("")
+    lines.extend(_day_line(r) for r in report.rows)
+    lines.append("")
     t = report.totals
-    if report.hourly:
+    if report.hourly or report.sheet is None:
         lines += [
             "— جمع (نیروی ساعتی) —",
             f"روزهای حضور: {to_persian_digits(t.present_days)} | ناقص: {to_persian_digits(t.incomplete_days)}",
@@ -130,17 +174,46 @@ def employee_report(report: EmployeeReport, title: str = "گزارش هفتگی 
         ]
         lines.extend(_legend(report))
         return "\n".join(lines)
+    m = report.sheet
     lines += [
         "— جمع —",
-        f"روزهای کامل: {to_persian_digits(t.present_days)} | ناقص: {to_persian_digits(t.incomplete_days)}"
-        f" | غیبت: {to_persian_digits(t.absent_days)}",
-        f"کارکرد: {format_minutes(t.worked_minutes)} از موظفی {format_minutes(t.required_minutes)}",
-        _with_cap("تعجیل", t.early_departure_minutes, report.early_cap_minutes),
-        f"تأخیر مجاز: {format_minutes(t.floating_late_minutes)}",
-        _with_cap("تأخیر غیرمجاز", t.late_minutes, report.late_cap_minutes),
-        f"اضافه‌کار: {format_minutes(t.overtime_minutes)} | کسری: {format_minutes(t.deficit_minutes)}",
-        f"خالص: {format_minutes(t.net_balance_minutes, signed=True)}",
+        _days_line(report),
+        f"کارکرد عادی: {format_minutes(m.normal)} | اضافه‌کار: {format_minutes(m.overtime)}",
+        f"تأخیر مجاز: {format_minutes(m.floating_late)} | تأخیر غیرمجاز: {format_minutes(m.late)}",
+        f"تعجیل: {format_minutes(m.early)}",
     ]
+    if month is not None and month.sheet is not None:
+        mm = month.sheet
+        lines += [
+            "",
+            "— ماه جاری تا امروز —",
+            *_split("تأخیر غیرمجاز", mm.late, mm.late_cap),
+            *_split("تعجیل", mm.early, mm.early_cap),
+            f"تأخیر و تعجیل جبران‌نشده: {format_minutes(mm.uncompensated)}",
+        ]
+    lines.extend(_legend(report))
+    if report.sheet_rules is not None:
+        lines.append(_footnote(report.sheet_rules))
+    return "\n".join(lines)
+
+
+def monthly_report(report: EmployeeReport, title: str = "گزارش ماهانه من") -> str:
+    """Month totals as in the Excel summary block; the days are in the Excel file."""
+    lines = [
+        f"📅 {title}",
+        f"{report.full_name}",
+        f"از {format_date_numeric(report.start)} تا {format_date_numeric(report.end)}",
+        "",
+    ]
+    t = report.totals
+    if report.hourly or report.sheet is None:
+        lines += [
+            "— جمع (نیروی ساعتی) —",
+            f"روزهای حضور: {to_persian_digits(t.present_days)} | ناقص: {to_persian_digits(t.incomplete_days)}",
+            f"کارکرد: {format_minutes(t.worked_minutes)}",
+        ]
+        return "\n".join(lines)
+    lines += ["— جمع ماه —", _days_line(report), *_month_figures(report.sheet)]
     lines.extend(_legend(report))
     return "\n".join(lines)
 

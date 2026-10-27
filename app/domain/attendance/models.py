@@ -19,6 +19,7 @@ class RecordSource(StrEnum):
     BOT_LIVE = "BOT_LIVE"
     MANUAL_CORRECTION = "MANUAL_CORRECTION"  # forgotten entry for an earlier day (📝)
     MANUAL_TODAY = "MANUAL_TODAY"  # today's time typed instead of the automatic one (✍️)
+    USER_EDIT = "USER_EDIT"  # a registered time changed by the employee (✏️)
     ADMIN_EDIT = "ADMIN_EDIT"
     LEGACY_IMPORT = "LEGACY_IMPORT"
 

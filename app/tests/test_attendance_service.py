@@ -264,3 +264,43 @@ async def test_hourly_staff_only_track_worked_time(services, make_user, clock) -
     full_time = await make_user("نیروی تمام‌وقت")
     recipients = await services.attendance.check_in_reminder_recipients(MONDAY)
     assert full_time in recipients and hourly in recipients  # hourly staff get the reminders too
+
+
+async def test_month_report_follows_the_excel_summary(services, make_user, clock) -> None:
+    from app.domain.leave.models import LeavePayType, LeaveRequest, LeaveStatus, LeaveUnit
+
+    user = await make_user()
+    clock.set(tehran(2026, 10, 19, 20, 0))
+    # 18/10: in 10:00 → 0:30 unauthorized late; out 18:00 → 1:12 overtime
+    await services.attendance.submit_correction(
+        user, CorrectionInput(CorrectionType.BOTH, date(2026, 10, 18), time(10, 0), time(18, 0))
+    )
+    # 17/10: in 08:30, out 16:00 → 0:30 allowed late, 0:48 early departure
+    await services.attendance.submit_correction(
+        user, CorrectionInput(CorrectionType.BOTH, date(2026, 10, 17), time(8, 30), time(16, 0))
+    )
+    services.session.add(
+        LeaveRequest(
+            user_id=user.id,
+            pay_type=LeavePayType.PAID,
+            unit=LeaveUnit.HOURLY,
+            start_date=date(2026, 10, 18),
+            end_date=date(2026, 10, 18),
+            start_time=time(16, 0),
+            end_time=time(18, 0),
+            starts_at=tehran(2026, 10, 18, 16, 0),
+            ends_at=tehran(2026, 10, 18, 18, 0),
+            duration_minutes=120,
+            status=LeaveStatus.APPROVED,
+            submitted_at=tehran(2026, 10, 18, 9, 0),
+        )
+    )
+    await services.session.commit()
+    month = await services.attendance.my_month(user)
+    m = month.sheet
+    assert (m.floating_late, m.late, m.early, m.overtime, m.paid_leave) == (30 + 90, 30, 48, 72, 120)
+    assert m.compensable == 120 + 30 + 48
+    assert m.uncompensated == 198 - 72
+    assert m.final_work == round(m.normal + 72 + 120 - 126 * 1.6)
+    row = next(r for r in month.rows if r.work_date == date(2026, 10, 18))
+    assert row.paid_leave_minutes == 120 and "مرخصی ساعتی با حقوق" in row.leave_note
