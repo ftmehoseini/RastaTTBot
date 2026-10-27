@@ -50,6 +50,8 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 | Key | Default | Meaning |
 |---|---|---|
 | `require_admin_activation` | `false` | New registrations stay inactive until a SUPER_ADMIN activates them |
+| `require_employee_roster` | `true` | Only numbers on the staff list (admin panel → «📋 فهرست کارکنان») can register. IDs in `BOOTSTRAP_SUPER_ADMIN_IDS` are exempt |
+| `max_roster_attempts` / `roster_lock_minutes` | `5` / `60` | Wrong numbers allowed before registration is locked for that person, and for how long |
 | `min_full_name_length` / `max_full_name_length` | `3` / `80` | Name validation at registration |
 
 ### attendance
@@ -69,6 +71,7 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 | `floating_check_in_until` | `09:30` | `floating_window` only: check-in until this time is allowed lateness (تأخیر مجاز) |
 | `monthly_unauthorized_late_cap_minutes` | `420` | Monthly cap on unauthorized lateness, shown in month reports (0 = no cap) |
 | `monthly_early_departure_cap_minutes` | `180` | Monthly cap on early departure (تعجیل), shown in month reports (0 = no cap) |
+| `final_work_surplus_factor` / `final_work_penalty_factor` | `0.8` / `1.6` | کارکرد نهایی: + overtime surplus × the first − uncompensated lateness × the second (0 = leave the term out) |
 | `max_shift_hours` | `16` | Longest allowed shift; a check-out after midnight belongs to the previous day within this limit |
 | `allow_checkout_without_checkin` | `false` | Allow check-out on a day without check-in |
 | `live_confirmation_ttl_seconds` | `300` | How long a check-in/out confirm button stays valid |
@@ -79,19 +82,33 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 
 #### Calculation policy `floating_window` (organization default)
 
+The organization's Excel timesheet, formula for formula (`app/domain/attendance/timesheet.py`; the
+admin's monthly Excel carries the same formulas, see EXCEL_TEMPLATES.md). With E = 08:00
+(`standard_start_time`), F = 09:30 (`floating_check_in_until`), G = 16:48 (`standard_end_time`),
+D = check-in, H = check-out:
+
 ```
-floating_late_minutes  = min(check_in, floating_check_in_until) - standard_start_time   (تأخیر مجاز, not deducted)
-late_minutes           = max(0, check_in - floating_check_in_until - allowed_late_arrival_minutes)   (تأخیر غیرمجاز)
-early_departure_minutes= max(0, standard_end_time - check_out - allowed_early_departure_minutes)    (تعجیل)
-gross_worked_minutes   = check_out - check_in
-raw = net balance      = gross_worked_minutes - standard_workday_minutes
-overtime_minutes       = round_down(max(0, raw), overtime_rounding_minutes)              (اضافه‌کار)
-deficit_minutes        = max(0, -raw)
+J ساعت مفید          = H − D
+K کارکرد عادی        = presence inside E..G: from D (from E when D is earlier), until H (until G when H is later)
+L تاخیر مجاز          = D − E when E ≤ D ≤ F;  F − E when D > F
+M تاخیر غیر مجاز      = D − F when D > F
+N تعجیل               = G − H when H < G
+O اضافه کار           = MAX(J − K, 0): presence before E and after G
+deficit (کسری)        = required − K: the part of the official window the person was not there
 ```
 
-Example with 08:00–16:48 and a 09:30 window: in 09:00, out 17:48 → allowed lateness 1:00, no early departure,
-no overtime (worked exactly 8:48). In 09:45, out 16:30 → allowed 1:30, unauthorized 0:15, early 0:18.
-A report that covers one whole Jalali month also shows the monthly caps, what is left and any overrun.
+Month (the summary block of the workbook):
+
+```
+قابل جبران            = ΣL + MIN(ΣM, 7 h) + MIN(ΣN, 3 h)          (caps: monthly_*_cap_minutes)
+غیرقابل جبران          = MAX(ΣM − 7 h, 0) + MAX(ΣN − 3 h, 0)
+اضافه کار مازاد        = MAX(ΣO − قابل جبران, 0)
+جبران نشده            = MAX(قابل جبران − ΣO, 0) + غیرقابل جبران
+کارکرد نهایی           = ΣK + MIN(ΣO, قابل جبران) + مرخصی با حقوق + مازاد × 0.8 − جبران نشده × 1.6
+```
+
+Example: in 11:34, out 19:00 → K 5:14, L 1:30, M 2:04, O 2:12. The formulas don't look at the weekday,
+so work on a Friday is calculated the same way (as in the workbook).
 
 #### Calculation policy `standard_deduction`
 

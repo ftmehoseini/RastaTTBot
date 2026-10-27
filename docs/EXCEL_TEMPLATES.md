@@ -36,6 +36,25 @@ Example:
 
 Uploading a second file for the same week creates version 2. Orders keep the name and price they were placed with. See WORKFLOWS.md for the replacement rules.
 
+## Monthly timesheet (`timesheet_<from>-<to>.xlsx`, `timesheet_me_…`)
+
+The organization's own timesheet layout, sent for whole-month reports (admin: ماه جاری / ماه قبل / one employee for a month; employee: گزارش ماهانه من → Excel). One sheet per full-time employee (hourly staff are in the detailed attendance report only), right-to-left, as an Excel table:
+
+| Column | Written by | Content |
+|---|---|---|
+| A روز, B ماه, C تاریخ | bot | Weekday, Jalali month, day |
+| D ساعت ورود, H ساعت خروج | bot | Times (a check-out after midnight is more than 24 h; a check-out without a check-in is left out and noted) |
+| E شروع شناوری, F پایان شناوری, G ساعت مجاز خروج | bot | 8:00, 9:30, 16:48 from the policy |
+| I مرخصی  با حقوق | bot | Approved paid leave: an hourly leave's length, 8:48 for a day of daily leave |
+| J ساعت مفید … O اضافه کار روزانه | **formulas** | The workbook's formulas, character for character |
+| P توضیحات | bot | Holiday, leave, missing time, ثبت فراموشی / ثبت دستی / ویرایش‌شده |
+
+Under the table, the summary block with the workbook's formulas: مجموع کارکرد عادی, مجموع اضافه کار, مقدار تاخیر و تعجیل قابل جبران, مجموع تاخیر مجاز, اضافه کار مازاد, مرخصی مصرفی, مجموع تاخیر غیرمجاز (cap 7:00 next to it), جبران نشده, مجموع تعجیل (cap 3:00), کارکرد نهایی (with the 0.8 / 1.6 factors from the policy). «مرخصی مجاز» is left empty for the admin to fill in. The file has no stored results: Excel (or LibreOffice) calculates on open. The test suite recalculates a generated file with LibreOffice and checks the results against the bot's own numbers.
+
+## Staff list (`staff_list.xlsx`, admin panel → فهرست کارکنان)
+
+Columns: شماره موبایل یا پرسنلی (text, keeps the leading 0), نام و نام خانوادگی (optional), نوع همکاری (optional: تمام‌وقت / ساعتی), وضعیت ثبت‌نام (download only, ignored on upload). The upload also accepts a sheet without a header (number, name, type in the first three columns) and any way of writing a mobile number. Rows with an invalid or repeated number are listed by row number and nothing is imported until they are fixed. Uploading replaces the list: new numbers are added, names and types are updated, numbers missing from the file are removed unless someone registered with them. A row whose name exactly matches one person who registered before the list existed is linked to that person.
+
 ## Attendance report (`attendance_all_<from>-<to>.xlsx`, `attendance_me_…`, `attendance_employee_…`)
 
 Sheet **جزئیات حضور**, one row per employee-day (workdays without a record appear as «بدون ثبت»): نام کارمند, شناسه کاربری, تاریخ شمسی, روز, تاریخ میلادی, ورود, خروج (`(+1)` = next day), کارکرد, موظفی, تأخیر (دقیقه), تعجیل (دقیقه), اضافه‌کار, کسری, خالص, وضعیت, منبع ورود, منبع خروج, اصلاحیه‌ها (each manual correction with its type, status and submission time).

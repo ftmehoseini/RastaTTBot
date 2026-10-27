@@ -94,3 +94,19 @@ async def test_claiming_and_hourly_from_the_list(services, make_user) -> None:
     await services.users.import_roster(admin, [("09125550000", "نیروی ساعتی", False)])
     await services.session.refresh(user)
     assert not user.is_hourly
+
+
+async def test_people_registered_before_the_list_are_linked_by_name(services, make_user, policy) -> None:
+    admin = await make_user("مدیر", RoleCode.SUPER_ADMIN)
+    policy.users.require_employee_roster = False
+    early = await services.users.register(55, 55, "علی رضايي", None)  # Arabic ي, before the list existed
+    policy.users.require_employee_roster = True
+    rows = [("09127770000", "علی  رضایی", True)]
+    preview = await services.users.import_roster(admin, rows, dry_run=True)
+    assert preview.linked == 1
+    await services.users.import_roster(admin, rows)
+    assert await services.users.roster_code_of(early) == "09127770000"
+    await services.session.refresh(early)
+    assert early.is_hourly
+    with pytest.raises(ConflictError):  # nobody else can take the number now
+        await services.users.find_roster_entry("09127770000")

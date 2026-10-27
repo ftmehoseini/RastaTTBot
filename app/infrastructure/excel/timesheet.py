@@ -14,7 +14,7 @@ from datetime import date, datetime, time, timedelta
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
-from openpyxl.worksheet.table import Table, TableFormula, TableStyleInfo
+from openpyxl.worksheet.table import Table, TableColumn, TableFormula, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.application.dto.attendance import DayRow, EmployeeReport
@@ -219,10 +219,17 @@ def add_timesheet_sheet(
     last = len(days) + 1
     table = Table(displayName=table_name, ref=f"A1:P{last}")
     table.tableStyleInfo = TableStyleInfo(name=TABLE_STYLE, showRowStripes=True)
-    table._initialise_columns()
-    for column in table.tableColumns:
-        if column.name in FORMULAS:
-            column.calculatedColumnFormula = TableFormula(attr_text=FORMULAS[column.name].format(t=table_name))
+    # Declaring the calculated columns lets Excel fill the formulas into rows added by hand.
+    table.tableColumns = [
+        TableColumn(
+            id=i,
+            name=header,
+            calculatedColumnFormula=(
+                TableFormula(attr_text=FORMULAS[header].format(t=table_name)) if header in FORMULAS else None
+            ),
+        )
+        for i, (header, _) in enumerate(COLUMNS, start=1)
+    ]
     sheet.add_table(table)
     _write_summary(sheet, table_name, last + 1, rules)
     return sheet

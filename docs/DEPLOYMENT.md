@@ -93,6 +93,7 @@ sudo systemctl disable --now rastattbot   # stop the old bot so two bots don't p
 - [ ] Only one process polls the token (old bot stopped; exactly one `bot` and one `beat` container)
 - [ ] `config/production.yaml`: workdays, start/end times, grace minutes, reminder times, food deadline, holidays for the year, payment details
 - [ ] `python -m app.cli check-config` output reviewed
+- [ ] Staff list uploaded (admin panel → «📋 فهرست کارکنان») before people are told to register
 - [ ] First SUPER_ADMIN logged in; ADMIN_1 (secretary) and ADMIN_2 (manager) roles assigned; each tried an approval
 - [ ] Test employee: check-in, check-out, forgotten entry, weekly report, leave request through both approvals, food order before and after the deadline, guest order
 - [ ] Menu template downloaded, filled and uploaded; broadcast sent to a test group first

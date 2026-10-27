@@ -483,6 +483,11 @@ async def roster_upload_file(message: Message, state: FSMContext, services: Serv
         f"✏️ تغییر نام یا نوع همکاری: {to_persian_digits(preview.updated)}\n"
         f"➖ حذف (در فایل نیست و ثبت‌نام نکرده): {to_persian_digits(preview.removed)}\n"
     )
+    if preview.linked:
+        text += (
+            f"🔗 {to_persian_digits(preview.linked)} شماره به کاربرانی که قبلاً ثبت‌نام کرده‌اند (با نام یکسان)"
+            " وصل می‌شود.\n"
+        )
     if preview.kept_registered:
         text += f"ℹ️ {to_persian_digits(preview.kept_registered)} نفر در فایل نیستند ولی ثبت‌نام کرده‌اند؛ حذف نمی‌شوند.\n"
     text += "\nآیا فهرست جدید جایگزین شود؟"

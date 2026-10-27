@@ -15,12 +15,19 @@ from app.infrastructure.repositories.audit import AuditRepository
 from app.infrastructure.repositories.users import RoleRepository, RosterRepository, UserRepository
 
 
+def _name_key(name: str) -> str:
+    """Names compared loosely: Arabic ي/ك as Persian ی/ک, zero-width joiners and extra spaces ignored."""
+    text = name.replace("ي", "ی").replace("ك", "ک").replace("\u200c", " ")
+    return " ".join(text.split())
+
+
 @dataclass
 class RosterImport:
     added: int = 0
     updated: int = 0
     removed: int = 0
     kept_registered: int = 0  # not in the new file but already used to register, so kept
+    linked: int = 0  # matched by name to people who registered before the list existed
 
     def as_dict(self) -> dict[str, int]:
         return asdict(self)
@@ -233,12 +240,29 @@ class UserService:
         existing = {e.code: e for e in await self.roster.list_all()}
         result = RosterImport()
         given = set()
+        # People who registered before the list existed: link each to the entry with exactly their
+        # name, so nobody else can register with their number.
+        linked_ids = {e.user_id for e in existing.values() if e.user_id}
+        by_name: dict[str, list[User]] = {}
+        for u in await self.users.list_active():
+            if u.id not in linked_ids:
+                by_name.setdefault(_name_key(u.full_name), []).append(u)
         for code, name, hourly in rows:
             given.add(code)
             entry = existing.get(code)
+            owner = None
+            if name and (entry is None or entry.user_id is None):
+                matches = by_name.get(_name_key(name), [])
+                if len(matches) == 1 and matches[0].id not in linked_ids:
+                    owner = matches[0]
+                    linked_ids.add(owner.id)
+                    result.linked += 1
             if entry is None:
                 if not dry_run:
-                    self.roster.add(EmployeeRosterEntry(code=code, full_name=name, hourly=hourly))
+                    entry = self.roster.add(EmployeeRosterEntry(code=code, full_name=name, hourly=hourly))
+                    if owner is not None:
+                        entry.user_id, entry.claimed_at = owner.id, self.time.now_utc()
+                        owner.schedule_code = SCHEDULE_HOURLY if hourly else None
                 result.added += 1
                 continue
             if (entry.full_name, entry.hourly) != (name, hourly):
@@ -246,6 +270,8 @@ class UserService:
             if dry_run:
                 continue
             entry.full_name, entry.hourly = name, hourly
+            if owner is not None:
+                entry.user_id, entry.claimed_at = owner.id, self.time.now_utc()
             if entry.user_id is not None:
                 user = await self.users.get(entry.user_id)
                 if user is not None and user.is_hourly != hourly:
