@@ -21,6 +21,7 @@ from app.domain.leave.models import OPEN_LEAVE_STATUSES
 from app.domain.notifications.models import NotificationType
 from app.domain.users.models import User
 from app.infrastructure.excel.reports import build_attendance_workbook, build_leave_workbook, report_filename
+from app.infrastructure.excel.timesheet import build_timesheet_workbook
 from app.infrastructure.integrations.messenger import to_markup
 from app.presentation.api.health import check_redis
 from app.presentation.bot.callbacks.data import AdminCb, CalCb, NavCb, UserAdminCb
@@ -120,6 +121,10 @@ async def _send_attendance(
         summary = services.attendance.team_summary(reports, start, end)
         await message.answer(att_texts.team_summary(summary, title))
     prefix = "attendance_employee" if user_id else "attendance_all"
+    if whole_month:
+        # The organization's timesheet layout, with its formulas (full-time staff)
+        content = build_timesheet_workbook(reports, services.attendance.sheet_rules, services.attendance.holidays)
+        await send_file(message, content, report_filename("timesheet", start, end))
     await send_file(message, build_attendance_workbook(reports), report_filename(prefix, start, end))
 
 

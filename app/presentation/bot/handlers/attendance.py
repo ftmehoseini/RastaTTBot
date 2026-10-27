@@ -16,6 +16,7 @@ from app.core.utils.text import to_persian_digits
 from app.domain.attendance.models import CorrectionStatus, CorrectionType
 from app.domain.users.models import User
 from app.infrastructure.excel.reports import build_attendance_workbook, report_filename
+from app.infrastructure.excel.timesheet import build_timesheet_workbook
 from app.presentation.bot.callbacks.data import OPEN_ATTENDANCE, AttCb, CalCb, CorrCb, NavCb, TimeCb
 from app.presentation.bot.handlers.common import (
     TIME_FORMAT_HINT,
@@ -170,8 +171,14 @@ async def my_excel(query: CallbackQuery, callback_data: AttCb, services: Service
     else:
         report = await services.attendance.my_week(user)
     await query.answer("در حال آماده‌سازی فایل…")
-    content = build_attendance_workbook([report])
-    await send_file(query_message(query), content, report_filename("attendance_me", report.start, report.end))
+    if callback_data.a == "month_xls" and not report.hourly:
+        rules, holidays = services.attendance.sheet_rules, services.attendance.holidays
+        content = build_timesheet_workbook([report], rules, holidays)
+        filename = report_filename("timesheet_me", report.start, report.end)
+    else:
+        content = build_attendance_workbook([report])
+        filename = report_filename("attendance_me", report.start, report.end)
+    await send_file(query_message(query), content, filename)
 
 
 # --- forgotten check-in / check-out ------------------------------------------------------------

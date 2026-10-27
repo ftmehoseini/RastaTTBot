@@ -427,6 +427,10 @@ class AttendanceService:
     # --- reports -----------------------------------------------------------------------
 
     @property
+    def holidays(self) -> set[date]:
+        return self.schedules.holidays
+
+    @property
     def sheet_rules(self) -> SheetRules:
         def clock(value: time) -> int:
             return value.hour * 60 + value.minute
