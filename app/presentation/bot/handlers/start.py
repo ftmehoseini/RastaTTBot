@@ -13,7 +13,7 @@ from app.core.utils.text import to_persian_digits
 from app.domain.users.models import User
 from app.presentation.bot.callbacks.data import NOOP, NavCb
 from app.presentation.bot.keyboards.common import BTN_HELP
-from app.presentation.bot.modules import HELP_TEXT, main_menu
+from app.presentation.bot.modules import help_text, main_menu
 from app.presentation.bot.states.flows import Registration
 
 router = Router(name="start")
@@ -120,7 +120,7 @@ async def _finish_registration(
         await message.answer(f"✅ ثبت‌نام شما با نام «{new_user.full_name}» انجام شد.\n{INACTIVE_TEXT}")
         return
     await message.answer(
-        f"✅ ثبت‌نام شما با نام «{new_user.full_name}» انجام شد.\n\n{HELP_TEXT}", reply_markup=main_menu(new_user)
+        f"✅ ثبت‌نام شما با نام «{new_user.full_name}» انجام شد.\n\n{help_text()}", reply_markup=main_menu(new_user)
     )
 
 
@@ -161,7 +161,7 @@ async def help_message(message: Message, user: User | None) -> None:
     if user is None:
         await message.answer("برای استفاده از ربات ابتدا /start را بزنید.")
         return
-    await message.answer(HELP_TEXT, reply_markup=main_menu(user) if user.is_active else None)
+    await message.answer(help_text(), reply_markup=main_menu(user) if user.is_active else None)
 
 
 @router.message(Command("whoami"))

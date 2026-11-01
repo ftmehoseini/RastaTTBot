@@ -5,6 +5,7 @@ from aiogram.fsm.storage.base import BaseStorage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.dto.messaging import Messenger
+from app.core.config import get_settings
 from app.core.config.policy import Policy
 from app.core.utils.clock import TimeService
 from app.presentation.bot.handlers import (
@@ -33,6 +34,13 @@ ROUTERS = [
     admin.router,
     fallback.router,
 ]
+# Routers that belong to an optional section (BOT_MODULES); the rest are always included.
+MODULE_OF_ROUTER = {
+    approvals.router: "leave",
+    leave.router: "leave",
+    food_admin.router: "food",
+    food.router: "food",
+}
 
 
 def build_dispatcher(
@@ -47,7 +55,10 @@ def build_dispatcher(
     dp.update.outer_middleware(UserLockMiddleware(policy.rate_limit.min_interval_seconds))
     dp.update.outer_middleware(ContextMiddleware(session_factory, policy, time_service, messenger, bootstrap_ids))
     dp.update.outer_middleware(ErrorMiddleware())
+    enabled = get_settings().enabled_modules
     for router in ROUTERS:
+        if MODULE_OF_ROUTER.get(router, "attendance") not in enabled:
+            continue  # buttons of a switched-off section fall through to the fallback ("expired")
         # Routers are module-level singletons; detach them so a dispatcher can be rebuilt (tests).
         router._parent_router = None
         dp.include_router(router)

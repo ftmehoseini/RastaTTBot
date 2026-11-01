@@ -33,9 +33,11 @@ main() {
   docker compose ps
 
   # The bot needs a few seconds after "Started" before its health server answers.
-  echo "==> Waiting for the bot to report healthy"
+  local port
+  port="$(grep -E '^HEALTH_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '"[:space:]')"
+  echo "==> Waiting for the bot to report healthy (port ${port:-8080})"
   for _ in $(seq 1 30); do
-    if curl -fsS http://127.0.0.1:8080/health 2>/dev/null; then
+    if curl -fsS "http://127.0.0.1:${port:-8080}/health" 2>/dev/null; then
       echo
       echo "==> Deployed $(git rev-parse --short HEAD)"
       exit 0

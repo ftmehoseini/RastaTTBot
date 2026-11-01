@@ -29,6 +29,9 @@ PLATFORM_MAX_BUTTONS_PER_ROW: dict[BotPlatform, int] = {
 }
 
 
+BOT_MODULES = ("attendance", "leave", "food")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -42,6 +45,9 @@ class Settings(BaseSettings):
     bootstrap_super_admin_ids: str = ""
     # Inline buttons per keyboard row. 0 = platform default (Soroush rejects wide rows).
     bot_max_buttons_per_row: int = Field(default=0, ge=0, le=8)
+    # Sections this bot offers, e.g. "attendance" for a production bot that only does check-in/out.
+    # Attendance, registration and the admin panel are always on.
+    bot_modules: str = "attendance,leave,food"
 
     database_url: str = "postgresql+asyncpg://rasta_bot:change-me@localhost:5432/rasta_bot"
     database_echo: bool = False
@@ -67,6 +73,18 @@ class Settings(BaseSettings):
     @property
     def api_base_url(self) -> str:
         return self.bot_api_base_url or PLATFORM_API_BASES[self.bot_platform]
+
+    @field_validator("bot_modules")
+    @classmethod
+    def _check_modules(cls, value: str) -> str:
+        unknown = {m.strip() for m in value.split(",") if m.strip()} - set(BOT_MODULES)
+        if unknown:
+            raise ValueError(f"unknown BOT_MODULES {sorted(unknown)}; choose from {list(BOT_MODULES)}")
+        return value
+
+    @property
+    def enabled_modules(self) -> frozenset[str]:
+        return frozenset({"attendance"} | {m.strip() for m in self.bot_modules.split(",") if m.strip()})
 
     @property
     def max_buttons_per_row(self) -> int:

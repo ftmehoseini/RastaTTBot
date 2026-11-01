@@ -1,13 +1,15 @@
 # Local and single-server deployment. Copy .env.example to .env first.
 #   docker compose up -d --build
 #   docker compose logs -f bot
+# Several bots on one server (e.g. production and development): one folder each, with its own
+# .env (COMPOSE_PROJECT_NAME, BOT_TOKEN, HEALTH_PORT); containers, volumes and images stay apart.
 
 x-app: &app
   build:
     context: .
     args:
       PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-  image: rasta-admin-bot:latest
+  image: ${COMPOSE_PROJECT_NAME:-rasta-admin-bot}:latest
   env_file: .env
   environment:
     DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -16,6 +18,8 @@ x-app: &app
     CELERY_RESULT_BACKEND: redis://redis:6379/2
     REPORTS_DIR: /app/data/reports
     UPLOAD_DIR: /app/data/uploads
+    # Inside the container the health server is always on 8080; HEALTH_PORT in .env is the host port.
+    HEALTH_PORT: "8080"
   volumes:
     - appdata:/app/data
     # Mount your policy overrides here (config/production.yaml is git-ignored)
@@ -80,7 +84,7 @@ services:
 
   worker:
     <<: *app
-    command: ["celery", "-A", "app.infrastructure.tasks.celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    command: ["celery", "-A", "app.infrastructure.tasks.celery_app", "worker", "--loglevel=INFO", "--concurrency=${WORKER_CONCURRENCY:-2}"]
     depends_on:
       migrate:
         condition: service_completed_successfully

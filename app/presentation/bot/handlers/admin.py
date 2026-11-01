@@ -34,7 +34,7 @@ from app.presentation.bot.handlers.leave import approval_buttons
 from app.presentation.bot.keyboards.common import back_row, button, chunk, confirm_rows, inline, step_row
 from app.presentation.bot.keyboards.pickers import calendar_for
 from app.presentation.bot.middlewares.filters import IsRegistered
-from app.presentation.bot.modules import BTN_ADMIN
+from app.presentation.bot.modules import BTN_ADMIN, module_enabled
 from app.presentation.bot.states.flows import ReportRange, RosterUpload
 
 router = Router(name="admin")
@@ -66,9 +66,12 @@ def panel_markup(user: User):
                 button("👤 گزارش یک کارمند", AdminCb(a="att_emp", v="0").pack()),
             ]
         )
-    if access.can(user, Permission.LEAVE_APPROVE_STEP_1) or access.can(user, Permission.LEAVE_APPROVE_STEP_2):
+    leave_on = module_enabled("leave")
+    if leave_on and (
+        access.can(user, Permission.LEAVE_APPROVE_STEP_1) or access.can(user, Permission.LEAVE_APPROVE_STEP_2)
+    ):
         rows.append([button("📥 کارتابل مرخصی", AdminCb(a="lv_inbox").pack())])
-    if access.can(user, Permission.LEAVE_REPORT_ALL):
+    if leave_on and access.can(user, Permission.LEAVE_REPORT_ALL):
         rows.append(
             [
                 button("📤 مرخصی‌های ماه جاری", AdminCb(a="lv_xls", v="month").pack()),

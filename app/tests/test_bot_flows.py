@@ -647,3 +647,59 @@ async def test_soroush_row_limit_applies_to_every_keyboard(bot: Harness, clock) 
         assert bot.recorder.widest_row == 2
     finally:
         set_max_buttons_per_row(8)
+
+
+@pytest.fixture
+def attendance_only(monkeypatch):
+    """A production bot that only offers check-in/out (BOT_MODULES=attendance)."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("BOT_MODULES", "attendance")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def _reply_keyboard(harness: Harness, chat_id: int) -> list[str]:
+    for call in reversed(harness.recorder.calls):
+        keyboard = getattr(getattr(call, "reply_markup", None), "keyboard", None)
+        if keyboard and int(call.chat_id) == chat_id:
+            return [b.text for row in keyboard for b in row]
+    return []
+
+
+async def test_attendance_only_bot(attendance_only, session_factory, policy, clock) -> None:
+    from app.presentation.bot.modules import BTN_ADMIN, BTN_ATTENDANCE, BTN_FOOD, BTN_LEAVE
+
+    bot = Harness(session_factory, policy, clock)
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(SEC, "سارا منشی", RoleCode.SUPER_ADMIN)
+    await bot.text(EMP, "/start")
+    menu = _reply_keyboard(bot, EMP)
+    assert BTN_ATTENDANCE in menu and BTN_LEAVE not in menu and BTN_FOOD not in menu
+    assert "مرخصی" not in bot.last_text(EMP)
+    await bot.text(EMP, "/help")
+    assert "مرخصی" not in bot.last_text(EMP) and "سفارش غذا" not in bot.last_text(EMP)
+    # The sections are switched off, not just hidden: their buttons and texts do nothing.
+    await bot.text(EMP, BTN_LEAVE)
+    assert "منوی پایین" in bot.last_text(EMP)
+    await bot.press(EMP, LeaveCb(a="new").pack())
+    assert any("منقضی" in a for a in bot.alerts())
+    # Attendance works as usual; the admin panel has no leave buttons.
+    clock.set(tehran(2026, 10, 19, 9, 0))
+    await bot.press(EMP, AttCb(a="in").pack())
+    await bot.press(EMP, next(b for b in bot.buttons(EMP) if b.startswith("att:in_ok")))
+    assert "ورود شما ثبت شد" in bot.last_text(EMP)
+    await bot.text(SEC, "/start")
+    assert BTN_ADMIN in _reply_keyboard(bot, SEC)
+    await bot.text(SEC, BTN_ADMIN)
+    assert not any(b.startswith("adm:lv_") for b in bot.buttons(SEC))
+    assert AdminCb(a="att", v="month").pack() in bot.buttons(SEC)
+
+
+def test_unknown_module_is_rejected(monkeypatch) -> None:
+    from app.core.config.settings import Settings
+
+    monkeypatch.setenv("BOT_MODULES", "attendance,payroll")
+    with pytest.raises(ValueError, match="payroll"):
+        Settings()

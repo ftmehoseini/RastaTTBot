@@ -43,6 +43,27 @@ sudo docker compose logs --tail=100 bot
 
 Rollback: `git checkout <previous tag>`, `docker compose run --rm migrate alembic downgrade <revision>` if the schema changed, then `docker compose up -d --build`.
 
+### Production and development bots on one server
+
+Two folders, one per bot, each a clone of this repository with its own `.env`. They share
+nothing but the machine: separate containers, database, Redis, volumes and image.
+
+| | Production | Development |
+|---|---|---|
+| Folder | `/root/rasta-bot-git` | `/root/rasta-bot-dev` |
+| Git branch | `main` | `develop` |
+| `.env` `COMPOSE_PROJECT_NAME` | `rasta-admin-bot` | `rasta-bot-dev` |
+| `.env` `BOT_TOKEN` | the real bot | a separate test bot |
+| `.env` `BOT_MODULES` | `attendance` (check-in/out only) | `attendance,leave,food` |
+| `.env` `HEALTH_PORT` | `8080` | `8081` |
+| `.env` `WORKER_CONCURRENCY` | `2` | `1` |
+| Deploy | `./docker/deploy.sh` | `./docker/deploy.sh` (or `quick.sh`) |
+
+Work flows one way: changes go to `develop` and the development bot first; when they are tested,
+`develop` is merged into `main` and production is deployed. A section is released to production
+by adding it to production's `BOT_MODULES` (no code change). Each stack uses about 700 MB of
+memory; stop the development one when it is not needed (`docker compose stop` in its folder).
+
 ## 4. Backups
 
 | What | How | Retention |
