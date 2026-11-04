@@ -1,10 +1,15 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim AS base
+# Pin the base image by digest in .env (PYTHON_IMAGE=python:3.12-slim@sha256:...) so a new upstream
+# build of python:3.12-slim doesn't invalidate the cache and force a full pip install on every deploy.
+ARG PYTHON_IMAGE=python:3.12-slim
+FROM ${PYTHON_IMAGE} AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=60 \
+    PIP_RETRIES=10
 
 # Servers in Iran often need a local PyPI mirror: --build-arg PIP_INDEX_URL=https://mirror/simple
 ARG PIP_INDEX_URL=https://pypi.org/simple
