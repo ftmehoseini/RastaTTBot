@@ -7,9 +7,7 @@ FROM ${PYTHON_IMAGE} AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=60 \
-    PIP_RETRIES=10
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Servers in Iran often need a local PyPI mirror: --build-arg PIP_INDEX_URL=https://mirror/simple
 ARG PIP_INDEX_URL=https://pypi.org/simple
