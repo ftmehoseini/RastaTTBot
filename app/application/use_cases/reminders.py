@@ -27,12 +27,13 @@ class ReminderRun:
     skipped: int = 0
 
 
-async def send_check_in_reminders(services: Services) -> ReminderRun:
+async def send_check_in_reminders(services: Services, force: bool = False) -> ReminderRun:
+    """`force` (manual run by an operator) ignores the clock; holidays and "already reminded today" still apply."""
     policy = services.policy.attendance
     attendance = services.attendance
     today = services.time.today()
     # Holidays are off for everyone; weekdays are checked per person (some work on Thursday).
-    if attendance.is_holiday(today) or not attendance.reminder_due(policy.check_in_reminder_time):
+    if attendance.is_holiday(today) or not (force or attendance.reminder_due(policy.check_in_reminder_time)):
         return ReminderRun(due=False)
     recipients = await attendance.check_in_reminder_recipients(today)
     result = await services.notifications.notify_many(
@@ -49,11 +50,11 @@ async def send_check_in_reminders(services: Services) -> ReminderRun:
     return ReminderRun(True, result.sent, result.failed, result.skipped)
 
 
-async def send_check_out_reminders(services: Services) -> ReminderRun:
+async def send_check_out_reminders(services: Services, force: bool = False) -> ReminderRun:
     policy = services.policy.attendance
     attendance = services.attendance
     today = services.time.today()
-    if not attendance.reminder_due(policy.check_out_reminder_time):
+    if not (force or attendance.reminder_due(policy.check_out_reminder_time)):
         return ReminderRun(due=False)
     result = BulkResult()
     for user, record in await attendance.check_out_reminder_recipients(today):
@@ -68,3 +69,14 @@ async def send_check_out_reminders(services: Services) -> ReminderRun:
         result = result.add(outcome)
     log.info("check-out reminders", day=today.isoformat(), sent=result.sent, failed=result.failed)
     return ReminderRun(True, result.sent, result.failed, result.skipped)
+
+
+async def send_test_reminder(services: Services, chat_id: int, kind: str) -> None:
+    """Send one reminder, exactly as people receive it, to one chat. Not logged, no dedup: for testing."""
+    today = services.time.today()
+    if kind == "in":
+        text, button = texts.check_in_reminder(today), ("⏱ ثبت ورود امروز", REMINDER_CHECK_IN)
+    else:
+        text = texts.check_out_reminder(today, services.time.now_local())
+        button = ("🏁 ثبت خروج امروز", REMINDER_CHECK_OUT)
+    await services.messenger.send_text(chat_id, "🧪 پیام آزمایشی\n" + text, InlineButtons.of([button]))

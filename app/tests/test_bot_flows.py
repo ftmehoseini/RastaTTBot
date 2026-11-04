@@ -732,6 +732,18 @@ async def test_reminder_buttons_open_check_in_and_check_out(bot: Harness, clock)
     assert "ثبت خروج امروز" in bot.last_text(EMP) and "چطور ثبت شود" in bot.last_text(EMP)
     assert not any("منقضی" in a for a in bot.alerts())
 
+    # A manual run outside the reminder hours still sends, but never twice the same day.
+    from app.application.use_cases.reminders import send_test_reminder
+
+    clock.set(tehran(2026, 10, 19, 14, 0))
+    async with bot.session_factory() as session:
+        assert (await send_check_out_reminders(bot.services(session))).due is False
+        assert (await send_check_out_reminders(bot.services(session), force=True)).sent == 0
+        await send_test_reminder(bot.services(session), EMP, "out")
+    assert "پیام آزمایشی" in bot.last_text(EMP)
+    await bot.press(EMP, bot.buttons(EMP)[0])
+    assert "ثبت خروج امروز" in bot.last_text(EMP)
+
     # Reminders sent by the old version (button "att:menu") open the attendance menu.
     await bot.press(EMP, "att:menu")
     assert "ورود و خروج" in bot.last_text(EMP) and AttCb(a="out").pack() in bot.buttons(EMP)
