@@ -34,7 +34,8 @@ main() {
 
   # The bot needs a few seconds after "Started" before its health server answers.
   local port
-  port="$(grep -E '^HEALTH_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '"[:space:]')"
+  # "|| true": no HEALTH_PORT line (production uses the default) must not stop the script under set -e.
+  port="$(grep -E '^HEALTH_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '"[:space:]' || true)"
   echo "==> Waiting for the bot to report healthy (port ${port:-8080})"
   for _ in $(seq 1 30); do
     if curl -fsS "http://127.0.0.1:${port:-8080}/health" 2>/dev/null; then
