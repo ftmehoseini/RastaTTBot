@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from app.application.dto.attendance import CorrectionInput, EditInput
 from app.application.presenters import attendance as texts
 from app.application.services.container import Services
+from app.application.use_cases.reminders import LEGACY_REMINDER_BUTTON, REMINDER_CHECK_IN, REMINDER_CHECK_OUT
 from app.core.exceptions import ConflictError, ExpiredActionError, ValidationError
 from app.core.utils.jalali import format_date, format_time
 from app.core.utils.text import to_persian_digits
@@ -77,6 +78,7 @@ async def open_menu(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == OPEN_ATTENDANCE)
+@router.callback_query(F.data == LEGACY_REMINDER_BUTTON)
 @router.callback_query(NavCb.filter(F.to == "att"))
 async def open_menu_from_button(query: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
@@ -99,6 +101,7 @@ def _punch_choice(auto_data: str, manual_data: str, at_local: datetime) -> Inlin
     )
 
 
+@router.callback_query(F.data == REMINDER_CHECK_IN)
 @router.callback_query(AttCb.filter(F.a == "in"))
 async def check_in_preview(query: CallbackQuery, services: Services, user: User) -> None:
     preview = await services.attendance.preview_check_in(user)
@@ -119,6 +122,7 @@ async def check_in_confirm(query: CallbackQuery, callback_data: AttCb, services:
     await show(query, text, back_to_menu())
 
 
+@router.callback_query(F.data == REMINDER_CHECK_OUT)
 @router.callback_query(AttCb.filter(F.a == "out"))
 async def check_out_preview(query: CallbackQuery, services: Services, user: User) -> None:
     preview = await services.attendance.preview_check_out(user)

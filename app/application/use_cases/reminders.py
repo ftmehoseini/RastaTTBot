@@ -11,8 +11,12 @@ from app.domain.notifications.models import NotificationType
 
 log = get_logger(__name__)
 
-# Callback data understood by the attendance router (opens the attendance menu).
-OPEN_ATTENDANCE_MENU = "att:menu"
+# Buttons under the reminders. The attendance router handles exactly these strings (imported from
+# here), so a reminder button can't point at something nobody answers.
+REMINDER_CHECK_IN = "open:att:in"  # opens today's check-in
+REMINDER_CHECK_OUT = "open:att:out"  # opens today's check-out
+# Sent by older versions; still in people's chats.
+LEGACY_REMINDER_BUTTON = "att:menu"
 
 
 @dataclass(frozen=True)
@@ -37,7 +41,7 @@ async def send_check_in_reminders(services: Services) -> ReminderRun:
         NotificationType.CHECK_IN_REMINDER,
         dedup_prefix=f"check_in_reminder:{today.isoformat()}",
         batch_key=f"check_in_reminder:{today.isoformat()}",
-        buttons=InlineButtons.of([("⏱ ثبت ورود", OPEN_ATTENDANCE_MENU)]),
+        buttons=InlineButtons.of([("⏱ ثبت ورود امروز", REMINDER_CHECK_IN)]),
     )
     log.info(
         "check-in reminders", day=today.isoformat(), sent=result.sent, failed=result.failed, skipped=result.skipped
@@ -59,7 +63,7 @@ async def send_check_out_reminders(services: Services) -> ReminderRun:
             NotificationType.CHECK_OUT_REMINDER,
             dedup_key=f"check_out_reminder:{today.isoformat()}:{user.id}",
             batch_key=f"check_out_reminder:{today.isoformat()}",
-            buttons=InlineButtons.of([("🏁 ثبت خروج", OPEN_ATTENDANCE_MENU)]),
+            buttons=InlineButtons.of([("🏁 ثبت خروج امروز", REMINDER_CHECK_OUT)]),
         )
         result = result.add(outcome)
     log.info("check-out reminders", day=today.isoformat(), sent=result.sent, failed=result.failed)

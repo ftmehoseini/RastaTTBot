@@ -703,3 +703,36 @@ def test_unknown_module_is_rejected(monkeypatch) -> None:
     monkeypatch.setenv("BOT_MODULES", "attendance,payroll")
     with pytest.raises(ValueError, match="payroll"):
         Settings()
+
+
+async def test_reminder_buttons_open_check_in_and_check_out(bot: Harness, clock) -> None:
+    from app.application.use_cases.reminders import send_check_in_reminders, send_check_out_reminders
+
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(MGR, "رضا محمدی")
+    clock.set(tehran(2026, 10, 19, 9, 0))  # Monday
+    await bot.press(EMP, AttCb(a="in").pack())
+    await bot.press(EMP, next(b for b in bot.buttons(EMP) if b.startswith("att:in_ok")))
+
+    # 10:05 — the one who hasn't checked in gets a reminder; its button opens today's check-in.
+    clock.set(tehran(2026, 10, 19, 10, 5))
+    async with bot.session_factory() as session:
+        assert (await send_check_in_reminders(bot.services(session))).sent == 1
+    assert "یادآوری" in bot.last_text(MGR)
+    await bot.press(MGR, bot.buttons(MGR)[0])  # the button exactly as it arrived
+    assert "ثبت ورود امروز" in bot.last_text(MGR) and "چطور ثبت شود" in bot.last_text(MGR)
+    assert not any("منقضی" in a for a in bot.alerts())
+
+    # 20:05 — checked in but not out; the reminder's button opens today's check-out.
+    clock.set(tehran(2026, 10, 19, 20, 5))
+    async with bot.session_factory() as session:
+        assert (await send_check_out_reminders(bot.services(session))).sent == 1
+    assert "خروج ثبت نشده" in bot.last_text(EMP)
+    await bot.press(EMP, bot.buttons(EMP)[0])
+    assert "ثبت خروج امروز" in bot.last_text(EMP) and "چطور ثبت شود" in bot.last_text(EMP)
+    assert not any("منقضی" in a for a in bot.alerts())
+
+    # Reminders sent by the old version (button "att:menu") open the attendance menu.
+    await bot.press(EMP, "att:menu")
+    assert "ورود و خروج" in bot.last_text(EMP) and AttCb(a="out").pack() in bot.buttons(EMP)
+    assert not any("منقضی" in a for a in bot.alerts())
