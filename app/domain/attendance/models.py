@@ -108,3 +108,23 @@ class AttendanceDailySummary(UUIDPrimaryKeyMixin, Base):
     net_balance_minutes: Mapped[int | None] = mapped_column(sa.Integer)
     policy_name: Mapped[str] = mapped_column(sa.String(40))
     calculated_at: Mapped[datetime] = mapped_column(utc_timestamp())
+
+
+class AttendanceWorkbook(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """An attendance Excel file uploaded by an admin, with the organization's own formulas.
+
+    The bot writes only check-in and check-out into it; LibreOffice recalculates a copy and the bot
+    reads what the formulas produced. The file itself lives on the data volume (one file per
+    version); this row says which person it belongs to and which version is current.
+    """
+
+    __tablename__ = "attendance_workbooks"
+
+    title: Mapped[str] = mapped_column(sa.String(200))  # file name as uploaded
+    sheets: Mapped[str] = mapped_column(sa.String(300))  # month sheets found, comma-separated
+    # The person whose check-ins are written into it; one file per person
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("users.id", ondelete="SET NULL"), unique=True
+    )
+    version: Mapped[int] = mapped_column(sa.Integer, default=1)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, sa.ForeignKey("users.id"))

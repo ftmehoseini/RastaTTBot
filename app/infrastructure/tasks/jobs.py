@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -16,6 +17,7 @@ import app.domain.models  # noqa: F401  (registers all ORM models)
 from app.application.services.container import Services
 from app.application.use_cases.food_broadcast import broadcast_menu
 from app.application.use_cases.reminders import send_check_in_reminders, send_check_out_reminders
+from app.application.use_cases.workbook_report import update_workbook
 from app.core.config import get_policy, get_settings
 from app.core.database import create_session_factory
 from app.core.logging import configure_logging, get_logger, new_correlation_id
@@ -113,6 +115,41 @@ def broadcast_menu_task(actor_id: str, menu_id: str) -> dict[str, Any] | None:
 
         asyncio.run(report())
     return _summary(result) if result else None
+
+
+@celery_app.task(name="attendance.workbook_update")
+def workbook_update(user_id: str, work_date: str, sync_month: bool = False) -> dict[str, Any] | None:
+    """Write a person's check-in/out into their Excel workbook and send what Excel calculated.
+
+    One person at a time: the lock waits (instead of skipping) so every punch gets its report.
+    """
+    new_correlation_id()
+    redis = Redis.from_url(settings.redis_url)
+    lock = redis.lock(f"lock:workbook:{user_id}", timeout=300, blocking_timeout=300)
+    if not lock.acquire():
+        log.warning("workbook busy for too long, giving up", user_id=user_id)
+        redis.close()
+        return None
+    try:
+
+        async def runner():
+            async with unit_of_work() as services:
+                return await update_workbook(
+                    services,
+                    UUID(user_id),
+                    date.fromisoformat(work_date),
+                    sync_month=sync_month,
+                    send_report=not sync_month,
+                )
+
+        result = asyncio.run(runner())
+        return {"status": result.status, "error": result.error}
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            log.warning("workbook lock already expired", user_id=user_id)
+        redis.close()
 
 
 @celery_app.task(name="maintenance.cleanup_files")

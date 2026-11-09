@@ -10,6 +10,7 @@ x-app: &app
     args:
       PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
       PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+      APT_MIRROR: ${APT_MIRROR:-}
   image: ${COMPOSE_PROJECT_NAME:-rasta-admin-bot}:latest
   env_file: .env
   environment:

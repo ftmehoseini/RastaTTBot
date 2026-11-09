@@ -9,15 +9,18 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.application.dto.attendance import CorrectionInput, EditInput
 from app.application.presenters import attendance as texts
+from app.application.presenters import workbook as workbook_texts
 from app.application.services.container import Services
 from app.application.use_cases.reminders import LEGACY_REMINDER_BUTTON, REMINDER_CHECK_IN, REMINDER_CHECK_OUT
 from app.core.exceptions import ConflictError, ExpiredActionError, ValidationError
+from app.core.logging import get_logger
 from app.core.utils.jalali import format_date, format_time
 from app.core.utils.text import to_persian_digits
 from app.domain.attendance.models import CorrectionStatus, CorrectionType
 from app.domain.users.models import User
 from app.infrastructure.excel.reports import build_attendance_workbook, report_filename
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
+from app.infrastructure.tasks import dispatch
 from app.presentation.bot.callbacks.data import OPEN_ATTENDANCE, AttCb, CalCb, CorrCb, KeyCb, NavCb, TimeCb
 from app.presentation.bot.handlers.common import (
     check_hhmm,
@@ -40,6 +43,8 @@ from app.presentation.bot.keyboards.pickers import (
 from app.presentation.bot.middlewares.filters import IsRegistered
 from app.presentation.bot.modules import BTN_ATTENDANCE
 from app.presentation.bot.states.flows import Correction
+
+log = get_logger(__name__)
 
 router = Router(name="attendance")
 router.message.filter(IsRegistered())
@@ -69,6 +74,34 @@ def menu_markup():
 
 def back_to_menu():
     return inline([back_row("att")])
+
+
+QUEUE_FAILED = "\n⚠️ ارسال گزارش اکسل فعلاً ممکن نشد؛ ساعت شما ثبت شده است."
+
+
+async def _queue_workbook(services: Services, user: User, work_date: date) -> str | None:
+    """People with an Excel workbook get their figures from it (the bot calculates nothing for them).
+
+    Returns None when the person has no workbook, otherwise "queued" or "failed".
+    """
+    if await services.workbooks.for_user(user.id) is None:
+        return None
+    try:
+        dispatch.enqueue_workbook_update(user.id, work_date)
+    except Exception:
+        log.warning("could not queue workbook update", user_id=str(user.id), exc_info=True)
+        return "failed"
+    return "queued"
+
+
+async def _punch_text(services: Services, user: User, kind: str, result) -> str:
+    at = services.time.to_local(result.record.check_in_at if kind == "in" else result.record.check_out_at)
+    if not result.created:
+        return texts.already_registered(kind, at)
+    queued = await _queue_workbook(services, user, result.record.work_date)
+    if queued is None:
+        return texts.punch_saved(kind, at, result.calculation)
+    return workbook_texts.punch_saved_short(kind, at) + (QUEUE_FAILED if queued == "failed" else "")
 
 
 @router.message(F.text == BTN_ATTENDANCE)
@@ -117,9 +150,7 @@ async def check_in_preview(query: CallbackQuery, services: Services, user: User)
 @router.callback_query(AttCb.filter(F.a == "in_ok"))
 async def check_in_confirm(query: CallbackQuery, callback_data: AttCb, services: Services, user: User) -> None:
     result = await services.attendance.check_in(user, datetime.fromtimestamp(callback_data.ts, UTC))
-    at = services.time.to_local(result.record.check_in_at)
-    text = texts.punch_saved("in", at, result.calculation) if result.created else texts.already_registered("in", at)
-    await show(query, text, back_to_menu())
+    await show(query, await _punch_text(services, user, "in", result), back_to_menu())
 
 
 @router.callback_query(F.data == REMINDER_CHECK_OUT)
@@ -140,9 +171,7 @@ async def check_out_confirm(query: CallbackQuery, callback_data: AttCb, services
     result = await services.attendance.check_out(
         user, datetime.fromtimestamp(callback_data.ts, UTC), date.fromordinal(callback_data.d)
     )
-    at = services.time.to_local(result.record.check_out_at)
-    text = texts.punch_saved("out", at, result.calculation) if result.created else texts.already_registered("out", at)
-    await show(query, text, back_to_menu())
+    await show(query, await _punch_text(services, user, "out", result), back_to_menu())
 
 
 @router.callback_query(AttCb.filter(F.a.in_({"in_man", "out_man"})))
@@ -443,20 +472,36 @@ async def correction_confirm(query: CallbackQuery, state: FSMContext, services: 
                 f"✅ {_kind_label(kind)} روز {format_date(day)} به ساعت {to_persian_digits(value)} ویرایش شد."
                 "\nدر گزارش‌ها با علامت ✏️ نمایش داده می‌شود."
             )
+            queued = await _queue_workbook(services, user, day)
+            if queued == "queued":
+                text += "\n📊 گزارش اکسل این روز چند لحظه‌ی دیگر ارسال می‌شود."
+            elif queued == "failed":
+                text += QUEUE_FAILED
         await show(query, text, back_to_menu())
         return
     draft = _correction_input(data)
     result = await services.attendance.submit_correction(user, draft)
+    queued = (
+        await _queue_workbook(services, user, draft.work_date) if result.status == CorrectionStatus.APPLIED else None
+    )
     if data.get("origin") == "today" and result.status == CorrectionStatus.APPLIED:
         kind = data["kind"]
         at = result.check_in_local if kind == "in" else result.check_out_local
-        calc = services.attendance.calculate(user, draft.work_date, result.record)
-        await show(query, f"{texts.punch_saved(kind, at, calc)}\n✍️ ثبت دستی", back_to_menu())
+        if queued is None:
+            calc = services.attendance.calculate(user, draft.work_date, result.record)
+            text = texts.punch_saved(kind, at, calc)
+        else:
+            text = workbook_texts.punch_saved_short(kind, at) + (QUEUE_FAILED if queued == "failed" else "")
+        await show(query, f"{text}\n✍️ ثبت دستی", back_to_menu())
         return
     if result.status == CorrectionStatus.PENDING_APPROVAL:
         text = "📨 ثبت فراموشی شما ذخیره شد و پس از تأیید مدیر اعمال می‌شود."
     else:
         text = "✅ ثبت فراموشی انجام شد و در گزارش‌ها با علامت 📝 نمایش داده می‌شود."
+        if queued == "queued":
+            text += "\n📊 گزارش اکسل این روز چند لحظه‌ی دیگر ارسال می‌شود."
+        elif queued == "failed":
+            text += QUEUE_FAILED
     await show(query, text, back_to_menu())
 
 

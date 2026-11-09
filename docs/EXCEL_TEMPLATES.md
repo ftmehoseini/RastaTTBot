@@ -4,6 +4,35 @@ All generated workbooks are right-to-left, with a bold coloured header row, a fr
 
 Generation code: `app/infrastructure/excel/`. It takes service DTOs and returns bytes, with no bot or database code.
 
+## Attendance workbooks uploaded by the admin (test version)
+
+For people who have one, the admin's own Excel file calculates everything. The bot only writes
+«ساعت ورود» and «ساعت خروج», LibreOffice recalculates a copy, and the bot sends what the formulas
+produced. Code: `app/infrastructure/excel/workbook.py` (cells), `recalc.py` (LibreOffice),
+`app/application/use_cases/workbook_report.py` (the flow).
+
+**Admin:** 🛠 پنل مدیریت → «📊 فایل‌های اکسل حضور» → upload. Then 👥 کاربران و نقش‌ها → the employee's
+card → «📊 فایل اکسل حضور» → choose the file. The month's existing check-ins are written into it.
+Any number of files; one per person. Only the super admin can do this.
+
+**What the file needs** (found by text, so no cell addresses to configure):
+
+| Part | Rule |
+|---|---|
+| Month sheets | Named after the Jalali month: «فروردین» … «اسفند» (other sheets are ignored) |
+| Header row | Somewhere in the first 10 rows, with «تاریخ» (day of the month), «ساعت ورود», «ساعت خروج» |
+| Day rows | Under the header; the «تاریخ» cell holds the day number (1–31) |
+| Day report | Every other column of that day's row, by its header (روز and ماه are skipped) |
+| Month report | Every label under the day rows that ends with «:», and the first value to its right |
+
+**After each check-in/out** the employee gets the time only («✅ ورود شما ثبت شد …»), then the report
+from the file. People without a file keep the bot's own reply.
+
+**Safety:** a new version of the file is saved on every change (the last 50 are kept, on the data volume
+under `workbooks/`); LibreOffice works on a copy; one person's file is written by one job at a time
+(Redis lock). If the month sheet is missing, a formula shows an error (#VALUE!, …), or LibreOffice fails,
+no figures are sent: the employee is told the report is delayed and the super admins get the reason.
+
 ## Weekly menu upload template
 
 Download it from the bot (**🍽 سفارش غذا → ⚙️ مدیریت غذا → 📄 دریافت قالب اکسل منو**). It comes prefilled with next week's dates (Saturday–Thursday) and has a guide sheet.

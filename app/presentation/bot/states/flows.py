@@ -38,5 +38,9 @@ class RosterUpload(StatesGroup):
     confirming = State()
 
 
+class WorkbookUpload(StatesGroup):
+    waiting_file = State()
+
+
 class ReportRange(StatesGroup):
     choosing = State()

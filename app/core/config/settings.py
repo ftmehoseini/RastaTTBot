@@ -57,6 +57,8 @@ class Settings(BaseSettings):
 
     reports_dir: Path = Path("reports")
     upload_dir: Path = Path("uploads")
+    # Admin-uploaded attendance workbooks (kept; not swept by the hourly cleanup). Empty = next to UPLOAD_DIR.
+    workbook_dir: Path | None = None
     max_upload_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
 
     health_host: str = "0.0.0.0"
@@ -81,6 +83,10 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"unknown BOT_MODULES {sorted(unknown)}; choose from {list(BOT_MODULES)}")
         return value
+
+    @property
+    def workbooks_path(self) -> Path:
+        return self.workbook_dir or self.upload_dir.parent / "workbooks"
 
     @property
     def enabled_modules(self) -> frozenset[str]:

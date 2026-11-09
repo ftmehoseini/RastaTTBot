@@ -1,7 +1,12 @@
 """Imports every ORM model so `Base.metadata` is complete (used by Alembic and tests)."""
 
 from app.domain.approvals.models import ApprovalStep, WorkflowAction
-from app.domain.attendance.models import AttendanceDailySummary, AttendanceManualCorrection, AttendanceRecord
+from app.domain.attendance.models import (
+    AttendanceDailySummary,
+    AttendanceManualCorrection,
+    AttendanceRecord,
+    AttendanceWorkbook,
+)
 from app.domain.audit.models import AuditLog
 from app.domain.food.models import (
     FoodGuestOrder,
@@ -20,6 +25,7 @@ __all__ = [
     "AttendanceDailySummary",
     "AttendanceManualCorrection",
     "AttendanceRecord",
+    "AttendanceWorkbook",
     "AuditLog",
     "FoodGuestOrder",
     "FoodMenu",

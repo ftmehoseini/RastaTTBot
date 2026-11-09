@@ -10,8 +10,11 @@ from app.application.services.food_service import FoodService
 from app.application.services.leave_service import LeaveService
 from app.application.services.notification_service import NotificationService
 from app.application.services.user_service import UserService
+from app.application.services.workbook_service import WorkbookService
 from app.core.config.policy import Policy
+from app.core.config.settings import get_settings
 from app.core.utils.clock import TimeService
+from app.infrastructure.excel.workbook import WorkbookStore
 
 
 class Services:
@@ -48,3 +51,11 @@ class Services:
     @cached_property
     def notifications(self) -> NotificationService:
         return NotificationService(self.session, self.messenger, self.time, self.policy.notifications)
+
+    @cached_property
+    def workbook_store(self) -> WorkbookStore:
+        return WorkbookStore(get_settings().workbooks_path)
+
+    @cached_property
+    def workbooks(self) -> WorkbookService:
+        return WorkbookService(self.session, self.workbook_store)

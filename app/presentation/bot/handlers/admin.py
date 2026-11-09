@@ -27,6 +27,7 @@ from app.infrastructure.excel.reports import build_attendance_workbook, build_le
 from app.infrastructure.excel.roster import build_roster_workbook, parse_roster
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
 from app.infrastructure.integrations.messenger import to_markup
+from app.infrastructure.tasks import dispatch
 from app.presentation.api.health import check_redis
 from app.presentation.bot.callbacks.data import AdminCb, CalCb, NavCb, UserAdminCb
 from app.presentation.bot.handlers.common import picker_range, query_message, send_file, show, start_picker
@@ -35,7 +36,7 @@ from app.presentation.bot.keyboards.common import back_row, button, chunk, confi
 from app.presentation.bot.keyboards.pickers import calendar_for
 from app.presentation.bot.middlewares.filters import IsRegistered
 from app.presentation.bot.modules import BTN_ADMIN, module_enabled
-from app.presentation.bot.states.flows import ReportRange, RosterUpload
+from app.presentation.bot.states.flows import ReportRange, RosterUpload, WorkbookUpload
 
 router = Router(name="admin")
 router.message.filter(IsRegistered())
@@ -82,6 +83,7 @@ def panel_markup(user: User):
         rows.append([button("👥 کاربران و نقش‌ها", UserAdminCb(a="list", p=0).pack())])
     if access.can(user, Permission.USERS_MANAGE_ROLES):
         rows.append([button("📋 فهرست کارکنان (ثبت‌نام)", AdminCb(a="roster").pack())])
+        rows.append([button("📊 فایل‌های اکسل حضور", AdminCb(a="wb").pack())])
     if access.can(user, Permission.SYSTEM_HEALTH):
         rows.append([button("🩺 وضعیت سیستم", AdminCb(a="health").pack())])
     rows.append(back_row())
@@ -354,6 +356,7 @@ def _user_markup(target: User, actor: User):
             ]
         )
         rows.append([button("📅 روزهای کاری", UserAdminCb(a="days", u=target.id.hex).pack())])
+        rows.append([button("📊 فایل اکسل حضور", UserAdminCb(a="wb", u=target.id.hex).pack())])
     rows.append([button("🔙 فهرست کاربران", UserAdminCb(a="list", p=0).pack())])
     return inline(rows)
 
@@ -581,3 +584,173 @@ async def health(event: CallbackQuery | Message, services: Services, user: User)
         await show(event, "\n".join(lines), inline([back_row("admin")]))
     else:
         await event.answer("\n".join(lines))
+
+
+# --- attendance Excel workbooks (the admin's formulas calculate everything) ------------------------------
+
+WORKBOOKS_HELP = (
+    "📊 فایل‌های اکسل حضور\n"
+    "هر کارمند می‌تواند یک فایل اکسل با فرمول‌های خودش داشته باشد. ربات فقط «ساعت ورود» و «ساعت خروج» را "
+    "در برگه‌ی همان ماه می‌نویسد و نتیجه‌ی فرمول‌ها را برای کارمند می‌فرستد.\n"
+    "شرط فایل: برگه‌هایی با نام ماه («آبان»، «آذر»، …) و ستون‌های «تاریخ»، «ساعت ورود» و «ساعت خروج». "
+    "جمع‌های ماه هم با برچسبی که به «:» ختم می‌شود خوانده می‌شوند (مثل «کارکرد نهایی:»).\n\n"
+    "۱) فایل را بارگذاری کنید.\n"
+    "۲) در «👥 کاربران و نقش‌ها» کارت کارمند را باز کنید و «📊 فایل اکسل حضور» را بزنید."
+)
+
+
+async def _workbooks_screen(services: Services, user: User) -> tuple[str, object]:
+    items = await services.workbooks.list_all(user)
+    rows = [
+        [
+            button(
+                f"📄 {wb.title[:28]} — {owner.full_name if owner else 'بدون کارمند'}",
+                AdminCb(a="wb_v", v=wb.id.hex).pack(),
+            )
+        ]
+        for wb, owner in items[:30]
+    ]
+    rows.append([button("📤 بارگذاری فایل جدید", AdminCb(a="wb_up").pack())])
+    rows.append(back_row("admin"))
+    count = f"\n\nفایل‌های بارگذاری‌شده: {to_persian_digits(len(items))}"
+    return WORKBOOKS_HELP + count, inline(rows)
+
+
+@router.callback_query(AdminCb.filter(F.a == "wb"))
+async def workbooks_panel(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    await state.clear()
+    text, markup = await _workbooks_screen(services, user)
+    await show(query, text, markup)
+
+
+@router.callback_query(AdminCb.filter(F.a == "wb_up"))
+async def workbook_upload_start(query: CallbackQuery, state: FSMContext, user: User) -> None:
+    access.require(user, Permission.USERS_MANAGE_ROLES)
+    await state.set_state(WorkbookUpload.waiting_file)
+    await show(
+        query,
+        "📤 فایل اکسل حضور (‎.xlsx‎) را به‌صورت فایل بفرستید.\nبرای انصراف /cancel را بزنید.",
+        inline([step_row(AdminCb(a="wb").pack())]),
+    )
+
+
+@router.message(StateFilter(WorkbookUpload.waiting_file), F.document)
+async def workbook_upload_file(message: Message, state: FSMContext, services: Services, user: User, bot: Bot) -> None:
+    access.require(user, Permission.USERS_MANAGE_ROLES)
+    document = message.document
+    assert document is not None
+    filename = document.file_name or "attendance.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        raise ValidationError("فقط فایل اکسل با پسوند ‎.xlsx‎ پذیرفته می‌شود.")
+    limit = get_settings().max_upload_bytes
+    if document.file_size and document.file_size > limit:
+        raise ValidationError("حجم فایل بیشتر از حد مجاز است.")
+    buffer = io.BytesIO()
+    await bot.download(document, destination=buffer)
+    if len(buffer.getvalue()) > limit:
+        raise ValidationError("حجم فایل بیشتر از حد مجاز است.")
+    workbook = await services.workbooks.upload(user, filename, buffer.getvalue())
+    await state.clear()
+    await message.answer(
+        f"✅ فایل «{workbook.title}» ذخیره شد.\nبرگه‌های ماه: {workbook.sheets}\n\n"
+        "حالا کارت کارمند را باز کنید (👥 کاربران و نقش‌ها) و «📊 فایل اکسل حضور» را بزنید تا این فایل را "
+        "به او بدهید.",
+        reply_markup=inline(
+            [
+                [button("👥 کاربران و نقش‌ها", UserAdminCb(a="list", p=0).pack())],
+                [button("🔙 فایل‌ها", AdminCb(a="wb").pack())],
+            ]
+        ),
+    )
+
+
+@router.message(StateFilter(WorkbookUpload.waiting_file))
+async def workbook_upload_not_a_file(message: Message) -> None:
+    await message.answer("لطفاً فایل اکسل را به‌صورت فایل (Document) بفرستید یا /cancel را بزنید.")
+
+
+@router.callback_query(AdminCb.filter(F.a == "wb_v"))
+async def workbook_view(query: CallbackQuery, callback_data: AdminCb, services: Services, user: User) -> None:
+    workbook = await services.workbooks.get(user, UUID(hex=callback_data.v))
+    owner = await services.users.get(workbook.user_id) if workbook.user_id else None
+    uploaded = format_date(services.time.to_local(workbook.created_at).date()) if workbook.created_at else "—"
+    text = (
+        f"📄 {workbook.title}\n👤 کارمند: {owner.full_name if owner else 'هنوز به کسی داده نشده'}\n"
+        f"📑 برگه‌های ماه: {workbook.sheets}\n🔢 نسخه: {to_persian_digits(workbook.version)}\n"
+        f"📅 بارگذاری: {uploaded}"
+    )
+    rows = [[button("⬇️ دریافت نسخه‌ی فعلی", AdminCb(a="wb_dl", v=workbook.id.hex).pack())]]
+    rows.append([button("🔙 فایل‌ها", AdminCb(a="wb").pack())])
+    await show(query, text, inline(rows))
+
+
+@router.callback_query(AdminCb.filter(F.a == "wb_dl"))
+async def workbook_download(query: CallbackQuery, callback_data: AdminCb, services: Services, user: User) -> None:
+    workbook = await services.workbooks.get(user, UUID(hex=callback_data.v))
+    content = await services.workbooks.content(user, workbook)
+    await query.answer("در حال ارسال فایل…")
+    await send_file(
+        query_message(query), content, workbook.title, caption=f"نسخه {to_persian_digits(workbook.version)}"
+    )
+
+
+async def _person_workbook_screen(services: Services, user: User, target: User) -> tuple[str, object]:
+    items = await services.workbooks.list_all(user)
+    current = next((wb for wb, owner in items if owner is not None and owner.id == target.id), None)
+    rows = []
+    for wb, owner in items[:30]:
+        mark = "✅" if current is not None and wb.id == current.id else "📄"
+        other = f" (فعلاً: {owner.full_name})" if owner is not None and owner.id != target.id else ""
+        rows.append([button(f"{mark} {wb.title[:30]}{other}", AdminCb(a="wb_set", v=wb.id.hex).pack())])
+    if current is not None:
+        rows.append([button("⬇️ دریافت فایل فعلی", AdminCb(a="wb_dl", v=current.id.hex).pack())])
+        rows.append([button("❌ بدون فایل اکسل", AdminCb(a="wb_set", v="none").pack())])
+    rows.append([button("📤 بارگذاری فایل جدید", AdminCb(a="wb_up").pack())])
+    rows.append([button("🔙 کارت کاربر", UserAdminCb(a="view", u=target.id.hex).pack())])
+    text = (
+        f"📊 فایل اکسل حضور {target.full_name}\n"
+        f"فایل فعلی: {current.title if current else '— (گزارش معمولی ربات)'}\n\n"
+        + (
+            "فایلی را که ورود و خروج این کارمند باید در آن نوشته شود انتخاب کنید:"
+            if items
+            else "هنوز فایلی بارگذاری نشده است."
+        )
+    )
+    return text, inline(rows)
+
+
+@router.callback_query(UserAdminCb.filter(F.a == "wb"))
+async def person_workbook(
+    query: CallbackQuery, callback_data: UserAdminCb, state: FSMContext, services: Services, user: User
+) -> None:
+    access.require(user, Permission.USERS_MANAGE_ROLES)
+    target = await services.users.get(UUID(hex=callback_data.u))
+    await state.clear()
+    # The file buttons carry only the file id (64-byte limit), so the person is remembered here.
+    await state.update_data(wb_user=target.id.hex)
+    text, markup = await _person_workbook_screen(services, user, target)
+    await show(query, text, markup)
+
+
+@router.callback_query(AdminCb.filter(F.a == "wb_set"))
+async def person_workbook_set(
+    query: CallbackQuery, callback_data: AdminCb, state: FSMContext, services: Services, user: User
+) -> None:
+    target_hex = (await state.get_data()).get("wb_user")
+    if not target_hex:
+        raise ExpiredActionError()
+    target = await services.users.get(UUID(hex=target_hex))
+    workbook_id = None if callback_data.v == "none" else UUID(hex=callback_data.v)
+    chosen = await services.workbooks.assign(user, workbook_id, target.id)
+    text, markup = await _person_workbook_screen(services, user, target)
+    if chosen is None:
+        note = "✔️ فایل اکسل این کارمند برداشته شد؛ گزارش‌ها مثل قبل از خود ربات است."
+    else:
+        note = f"✔️ فایل «{chosen.title}» به {target.full_name} داده شد."
+        try:
+            # Write this month's existing check-ins/outs into the file, without messaging the employee.
+            dispatch.enqueue_workbook_update(target.id, services.time.today(), sync_month=True)
+            note += "\nورود و خروج‌های ثبت‌شده‌ی این ماه در فایل نوشته می‌شود."
+        except Exception:
+            note += "\n⚠️ نوشتن ورود و خروج‌های این ماه در فایل فعلاً ممکن نشد؛ با اولین ثبت بعدی انجام می‌شود."
+    await show(query, f"{note}\n\n{text}", markup)

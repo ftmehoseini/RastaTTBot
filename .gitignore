@@ -21,6 +21,7 @@ htmlcov/
 data/
 reports/
 uploads/
+workbooks/
 backups/
 *.sqlite3
 *.db
