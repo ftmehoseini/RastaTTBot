@@ -3,6 +3,8 @@
 python -m app.cli create-super-admin --user-id 123456789 --name "نام مدیر"
 python -m app.cli import-legacy-sqlite data/attendance.sqlite3 [--dry-run] [--admin-ids 1,2]
 python -m app.cli check-config
+python -m app.cli send-test-reminder --chat-id 123456789 --kind out
+python -m app.cli send-reminders --kind in
 """
 
 import argparse
@@ -236,6 +238,24 @@ async def check_api(chat_id: int) -> int:
     return 0 if all(o == "OK" for _, o in results) else 1
 
 
+async def reminders_command(kind: str, chat_id: int | None) -> int:
+    from app.application.use_cases import reminders
+    from app.infrastructure.tasks.jobs import unit_of_work
+
+    async with unit_of_work() as services:
+        if chat_id is not None:
+            await reminders.send_test_reminder(services, chat_id, kind)
+            print(f"test {kind} reminder sent to {chat_id}")
+            return 0
+        job = reminders.send_check_in_reminders if kind == "in" else reminders.send_check_out_reminders
+        run = await job(services, force=True)
+    if not run.due:
+        print("not sent: today is a holiday")
+    else:
+        print(f"sent: {run.sent}, failed: {run.failed}, skipped (already reminded today): {run.skipped}")
+    return 0 if run.failed == 0 else 1
+
+
 def check_config() -> None:
     settings, policy = get_settings(), get_policy()
     print(f"environment: {settings.app_env}")
@@ -270,6 +290,13 @@ def main(argv: list[str] | None = None) -> int:
     p_api = sub.add_parser("check-api", help="send test messages and report which ones the platform rejects")
     p_api.add_argument("--chat-id", type=int, default=0, help="your numeric user ID (default: first bootstrap admin)")
 
+    p_test = sub.add_parser("send-test-reminder", help="send one reminder with its button to one chat (testing)")
+    p_test.add_argument("--chat-id", type=int, required=True, help="numeric user ID (/myid)")
+    p_test.add_argument("--kind", choices=["in", "out"], default="out")
+
+    p_rem = sub.add_parser("send-reminders", help="send today's real reminders now, whatever the time")
+    p_rem.add_argument("--kind", choices=["in", "out"], required=True)
+
     args = parser.parse_args(argv)
     if args.command == "create-super-admin":
         asyncio.run(create_super_admin(args.user_id, args.name))
@@ -283,6 +310,10 @@ def main(argv: list[str] | None = None) -> int:
         if not chat_id:
             parser.error("pass --chat-id <your numeric ID>")
         return asyncio.run(check_api(chat_id))
+    elif args.command == "send-test-reminder":
+        return asyncio.run(reminders_command(args.kind, args.chat_id))
+    elif args.command == "send-reminders":
+        return asyncio.run(reminders_command(args.kind, None))
     return 0
 
 
