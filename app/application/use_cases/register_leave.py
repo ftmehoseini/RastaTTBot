@@ -18,6 +18,7 @@ from app.application.services.container import Services
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security.rbac import Permission
 from app.core.utils.jalali import format_date, to_jalali
+from app.core.utils.text import to_persian_digits
 from app.domain.attendance.models import AttendanceWorkbook
 from app.domain.audit.models import AuditAction
 from app.domain.leave.excel_rules import (
@@ -142,7 +143,7 @@ async def register_leave(services: Services, actor: User, data: LeaveInput) -> L
     try:
         row = await asyncio.to_thread(read_day_cells, content, jalali.month, jalali.day)
         cells = _cells_for(data, row, f"فایل اکسل {plan.employee.full_name}")
-        content = await asyncio.to_thread(write_cells, content, jalali.month, jalali.day, cells.cells)
+        content = await asyncio.to_thread(write_cells, content, jalali.month, jalali.day, cells.cells, excel_note(data))
     except WorkbookError as exc:
         await services.session.rollback()
         raise ValidationError(str(exc)) from exc
@@ -187,6 +188,14 @@ def describe(plan: LeavePlan) -> str:
     ]
     lines += [f"▫️ {header}: {format_duration(m)}" for header, m in plan.cells.cells.items()]
     return "\n".join(lines)
+
+
+def excel_note(data: LeaveInput) -> str:
+    """What is added to the day's «توضیحات», e.g. «مرخصی ساعتی با حقوق ۰۸:۰۰ تا ۱۰:۳۰»."""
+    text = f"مرخصی {UNIT_TITLES[data.unit]} {PAY_TITLES[data.pay_type]}"
+    if data.unit == LeaveUnit.HOURLY and data.start and data.end:
+        text += f" {data.start:%H:%M} تا {data.end:%H:%M}"
+    return to_persian_digits(text)
 
 
 def employee_notice(plan: LeavePlan) -> str:

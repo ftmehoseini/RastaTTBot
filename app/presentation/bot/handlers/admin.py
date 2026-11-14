@@ -23,6 +23,7 @@ from app.application.use_cases.register_leave import (
     plan_leave,
     register_leave,
 )
+from app.application.use_cases.workbook_report import workbook_file_rows
 from app.core.config.policy import WEEKDAY_FA, WEEKDAY_ORDER
 from app.core.config.settings import get_settings
 from app.core.exceptions import AppError, ExpiredActionError, NotFoundError, PermissionDeniedError, ValidationError
@@ -153,7 +154,9 @@ async def _send_attendance(
         await message.answer(att_texts.team_summary(summary, title))
     # Every attendance Excel file has the organization's timesheet structure, for any period.
     rules, holidays = services.attendance.sheet_rules, services.attendance.holidays
-    content = await asyncio.to_thread(build_timesheet_workbook, reports, rules, holidays)
+    # What the admin set in each person's own Excel file (leave, notes) shows in the export too.
+    file_rows = await workbook_file_rows(services, [r.user_id for r in reports], start, end)
+    content = await asyncio.to_thread(build_timesheet_workbook, reports, rules, holidays, file_rows=file_rows)
     prefix = "timesheet_employee" if user_id else "timesheet"
     await send_file(message, content, report_filename(prefix, start, end))
 

@@ -31,6 +31,7 @@ from app.infrastructure.excel.workbook import (
     WorkbookReport,
     read_period,
     read_report,
+    read_rows,
     write_times,
 )
 from app.infrastructure.repositories.attendance import AttendanceRepository
@@ -154,3 +155,27 @@ async def notify_admins_of_failure(services: Services, full_name: str, title: st
             texts.report_failed_for_admin(full_name, services.time.today(), title, reason),
             NotificationType.GENERIC,
         )
+
+
+async def workbook_file_rows(
+    services: Services, user_ids: list[UUID], start: date, end: date
+) -> dict[UUID, dict[date, dict[str, object]]]:
+    """For people with their own Excel file: its stored rows of these days, for the Excel exports.
+
+    A file that can't be read is skipped (the export then shows the bot's own data for that person).
+    """
+    result: dict[UUID, dict[date, dict[str, object]]] = {}
+    dates = iter_days(start, end)
+    wanted = [(to_jalali(d).month, to_jalali(d).day) for d in dates]
+    for user_id in user_ids:
+        workbook = await services.workbooks.repo.for_user(user_id)
+        if workbook is None:
+            continue
+        try:
+            content = await asyncio.to_thread(services.workbook_store.read, workbook.id, workbook.version)
+            rows = await asyncio.to_thread(read_rows, content, wanted)
+        except (WorkbookError, OSError, ValueError) as exc:
+            log.warning("workbook rows not readable for export", user_id=str(user_id), error=str(exc))
+            continue
+        result[user_id] = {d: rows[key] for d, key in zip(dates, wanted, strict=True) if key in rows}
+    return result

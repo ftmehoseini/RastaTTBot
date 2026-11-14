@@ -13,7 +13,7 @@ from app.application.presenters import attendance as texts
 from app.application.presenters import workbook as workbook_texts
 from app.application.services.container import Services
 from app.application.use_cases.reminders import LEGACY_REMINDER_BUTTON, REMINDER_CHECK_IN, REMINDER_CHECK_OUT
-from app.application.use_cases.workbook_report import notify_admins_of_failure, workbook_period
+from app.application.use_cases.workbook_report import notify_admins_of_failure, workbook_file_rows, workbook_period
 from app.core.exceptions import ConflictError, ExpiredActionError, ValidationError
 from app.core.logging import get_logger
 from app.core.utils.jalali import format_date, format_time, month_range, week_range
@@ -245,7 +245,9 @@ async def my_excel(query: CallbackQuery, callback_data: AttCb, services: Service
     await query.answer("در حال آماده‌سازی فایل…")
     # Every attendance Excel file has the organization's timesheet structure (week or month).
     rules, holidays = services.attendance.sheet_rules, services.attendance.holidays
-    content = await asyncio.to_thread(build_timesheet_workbook, [report], rules, holidays)
+    # What the admin set in the person's own Excel file (leave, notes) shows in the export too.
+    file_rows = await workbook_file_rows(services, [user.id], report.start, report.end)
+    content = await asyncio.to_thread(build_timesheet_workbook, [report], rules, holidays, file_rows=file_rows)
     filename = report_filename("timesheet_me", report.start, report.end)
     await send_file(query_message(query), content, filename)
 

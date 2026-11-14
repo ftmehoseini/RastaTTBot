@@ -113,11 +113,13 @@ checked on every step). Works whether or not the employee leave module (`BOT_MOD
    start x and end y are typed as HH:MM.
 5. Preview: the case and the cells that will change → confirm.
 
-The employee's **uploaded Excel file is the only record**: the cells of that day's row are overwritten
+The employee's **uploaded Excel file is the only record**: the cells of that day's row are overwritten,
+«توضیحات» gets «مرخصی ساعتی با حقوق ۰۸:۰۰ تا ۱۰:۳۰» / «مرخصی روزانه …» after what is already there,
 (a new version of the file is saved; older versions stay on the server) and the registration is kept in
 the audit log (`LEAVE_REGISTERED_BY_ADMIN`). The employee gets a message. There is no cancel button: to
 cancel or correct a leave, the admin downloads the file (employee card → 📊 فایل اکسل حضور), clears the
-cells and uploads it again.
+cells and uploads it again. Every Excel export of that person (📥 in «گزارش ماهانه/هفتگی من», admin reports)
+takes these cells from the file, so the leave shows there too, and disappears when it is cleared.
 
 Cases (`app/domain/leave/excel_rules.py`). E/F/G are read from the employee's row of that day
 (08:00 / 09:30 / 16:48 in the organization's sheet):

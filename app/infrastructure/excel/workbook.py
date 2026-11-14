@@ -197,10 +197,11 @@ def cell_minutes(value: object) -> int | None:
     return _minutes(value, "h:mm")
 
 
-def write_cells(content: bytes, month: int, day: int, cells: dict[str, int]) -> bytes:
+def write_cells(content: bytes, month: int, day: int, cells: dict[str, int], note: str | None = None) -> bytes:
     """Write times (minutes) into the given columns of a day's row; nothing else changes.
 
-    Columns are found by header text. Raises WorkbookError if a column is missing.
+    `note` is added to the day's «توضیحات» (after what is already there), if the sheet has that column.
+    Columns are found by header text. Raises WorkbookError if a time column is missing.
     """
     workbook, layout, sheet, row = _day_cell(content, month, day)
     targets = {}
@@ -214,10 +215,33 @@ def write_cells(content: bytes, month: int, day: int, cells: dict[str, int]) -> 
         cell.value = _clock(minutes)
         if cell.number_format in ("General", ""):
             cell.number_format = "h:mm"
+    notes_col = layout.columns.get(NOTES_HEADER)
+    if note and notes_col is not None:
+        cell = sheet.cell(row, notes_col)
+        current = str(cell.value).strip() if cell.value is not None else ""
+        cell.value = f"{current} | {note}" if current else note
     workbook.calculation.fullCalcOnLoad = True
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def read_rows(content: bytes, days: list[tuple[int, int]]) -> dict[tuple[int, int], dict[str, object]]:
+    """The stored values of several day rows, by (month, day) and normalized header.
+
+    Days whose month sheet or row is missing are left out. Formulas are returned as written («=…»).
+    """
+    workbook = load_workbook(io.BytesIO(content))
+    sheets = month_sheets(workbook)
+    result: dict[tuple[int, int], dict[str, object]] = {}
+    for month, day in days:
+        layout = sheets.get(month)
+        row = layout.day_rows.get(day) if layout else None
+        if layout is None or row is None:
+            continue
+        sheet = workbook[layout.title]
+        result[(month, day)] = {header: sheet.cell(row, col).value for header, col in layout.columns.items()}
+    return result
 
 
 # --- reading ------------------------------------------------------------------------------------------

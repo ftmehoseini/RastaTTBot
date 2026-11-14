@@ -92,7 +92,7 @@ references adjusted.
 | A روز, B ماه, C تاریخ | bot | Weekday, Jalali month, day |
 | D ساعت ورود, H ساعت خروج | bot | Times (a check-out after midnight is more than 24 h; a check-out without a check-in is left out and noted) |
 | E شروع شناوری, F پایان شناوری, G ساعت مجاز خروج | bot | 8:00, 9:30, 16:48 from the policy. Day off with presence: E = F = G = check-in (all overtime). Hourly staff: E = F = check-in and G = check-out (no lateness or early departure) |
-| I مرخصی وسط روز, J مرخصي اول و آخر | — | Empty in the bot's generated files. In an employee's uploaded file they are filled by **📝 ثبت مرخصی** (see WORKFLOWS.md) |
+| I مرخصی وسط روز, J مرخصي اول و آخر | file | Filled by **📝 ثبت مرخصی** in the employee's own Excel file (see WORKFLOWS.md) and copied from there |
 | K ساعت مفید … P اضافه کار روزانه | **formulas** | The template's formulas, character for character |
 | Q توضیحات | bot | Holiday, leave, missing time, ثبت فراموشی / ثبت دستی / ویرایش‌شده |
 
@@ -104,6 +104,12 @@ Totals block (the template's own formulas): مجموع کارکرد عادی, م
 reports give the same figure). The file has no stored results: Excel or LibreOffice calculates on open.
 The test suite compares the generated sheet with the template cell for cell, and recalculates a
 generated file with LibreOffice to check it against the bot's own numbers.
+
+**People with their own Excel file:** every export of theirs takes from that file, for each day, what the
+admin set there: E/F/G where they differ from the official 08:00 / 09:30 / 16:48 (a registered leave),
+I and J, and «توضیحات» (added to the bot's own notes). Check-in and check-out stay the bot's records.
+So a leave registered in the bot, or changed by hand in the file and uploaded again, shows in every
+export; clearing it in the file and uploading again removes it everywhere.
 
 To change the structure, replace the template file with a new version of the organization's sheet
 (same column headers); no code change is needed.

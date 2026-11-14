@@ -19,6 +19,7 @@ from copy import copy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from uuid import UUID
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
@@ -30,6 +31,7 @@ from app.application.dto.attendance import DayRow, EmployeeReport
 from app.core.utils.jalali import iter_days, month_name, to_jalali, weekday_name
 from app.domain.attendance.models import DayStatus
 from app.domain.attendance.timesheet import SheetRules
+from app.infrastructure.excel.workbook import cell_minutes
 
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "timesheet_template.xlsx"
 
@@ -42,6 +44,8 @@ FLOAT_END = "پایان شناوری"
 ALLOWED_EXIT = "ساعت مجاز خروج"
 CHECK_OUT = "ساعت خروج"
 NOTES = "توضیحات"
+MIDDAY_LEAVE = "مرخصی وسط روز"
+EDGE_LEAVE = "مرخصی اول و آخر"  # as normalized (the file writes it with Arabic «ي»)
 REQUIRED = (WEEKDAY, MONTH, DAY, CHECK_IN, FLOAT_START, FLOAT_END, ALLOWED_EXIT, CHECK_OUT)
 
 # A1-style reference (B32, $L$34, …) in a formula; table names and structured references don't match.
@@ -175,6 +179,28 @@ def _inputs(row: DayRow | None, day: date, hourly: bool, rules: SheetRules) -> d
     return values
 
 
+def _from_file(values: dict[str, object], file_row: Mapping[str, object], rules: SheetRules) -> None:
+    """Take what the admin set in the person's own Excel file for this day (e.g. a registered leave):
+    E/F/G where they differ from the official times, the two leave columns and the notes.
+    Check-in and check-out stay the bot's records (the bot writes them into the file too)."""
+    official = {FLOAT_START: rules.floating_start, FLOAT_END: rules.floating_end, ALLOWED_EXIT: rules.allowed_exit}
+    for header, default in official.items():
+        minutes = cell_minutes(file_row.get(_key(header)))
+        if minutes is not None and minutes != default:
+            values[header] = _clock(minutes)
+    for header in (MIDDAY_LEAVE, EDGE_LEAVE):
+        minutes = cell_minutes(file_row.get(_key(header)))
+        if minutes:
+            values[_key(header)] = _clock(minutes)
+    note = file_row.get(_key(NOTES))
+    if isinstance(note, str) and note.strip() and not note.startswith("="):
+        current = values.get(NOTES)
+        if not current:
+            values[NOTES] = note.strip()
+        elif note.strip() not in str(current):
+            values[NOTES] = f"{current} | {note.strip()}"
+
+
 def add_timesheet_sheet(
     workbook: Workbook,
     template: _Template,
@@ -183,6 +209,7 @@ def add_timesheet_sheet(
     holidays: Mapping[date, str],
     table_name: str,
     title: str,
+    file_rows: Mapping[date, Mapping[str, object]] | None = None,
 ) -> Worksheet:
     tpl = template.sheet
     old_name = template.table.displayName
@@ -206,6 +233,8 @@ def add_timesheet_sheet(
         row = rows.get(day)
         values = _inputs(row, day, report.hourly, rules)
         values[NOTES] = _notes(row, day, holidays) or None
+        if file_rows and day in file_rows:
+            _from_file(values, file_rows[day], rules)
         by_column = {template.columns[h]: v for h, v in values.items() if h in template.columns}
         # Day n copies the template's row n (its exact styles); a longer month repeats the last row.
         source_row = min(template.day_row + index, template.last_day_row)
@@ -264,15 +293,27 @@ def build_timesheet_workbook(
     rules: SheetRules,
     holidays: Mapping[date, str],
     template_path: Path = TEMPLATE_PATH,
+    file_rows: Mapping[UUID, Mapping[date, Mapping[str, object]]] | None = None,
 ) -> bytes:
-    """One sheet per employee in the organization's structure, for each report's days."""
+    """One sheet per employee in the organization's structure, for each report's days.
+
+    `file_rows` holds, per person who has their own Excel file, that file's stored day rows: what the
+    admin set there (leave, changed times, notes) is shown in the export too.
+    """
     workbook = load_workbook(template_path)
     template = _template(workbook)
     used: set[str] = set()
     for i, report in enumerate(reports, start=1):
         month = month_name(to_jalali(report.start).month)
         add_timesheet_sheet(
-            workbook, template, report, rules, holidays, f"{month}_{i}", _sheet_title(report.full_name, used)
+            workbook,
+            template,
+            report,
+            rules,
+            holidays,
+            f"{month}_{i}",
+            _sheet_title(report.full_name, used),
+            (file_rows or {}).get(report.user_id),
         )
     if reports:
         workbook.remove(template.sheet)

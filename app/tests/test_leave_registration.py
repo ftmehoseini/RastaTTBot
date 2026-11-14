@@ -115,7 +115,8 @@ async def test_case_1_is_written_into_the_employees_row_and_nothing_else(service
     before = openpyxl.load_workbook(io.BytesIO(store.read(workbook.id, 1))).worksheets[0]
     after = openpyxl.load_workbook(io.BytesIO(store.read(workbook.id, 2))).worksheets[0]
     changed = sorted(c.coordinate for row in before.iter_rows() for c in row if c.value != after[c.coordinate].value)
-    assert changed == ["E28", "F28", "J28"]  # only the three cells of that day
+    assert changed == ["E28", "F28", "J28", "Q28"]  # the three cells of the rule, and the day's note
+    assert after["Q28"].value == "مرخصی ساعتی با حقوق ۰۸:۰۰ تا ۱۰:۳۰"
     assert (after["E28"].value, after["F28"].value, after["J28"].value) == (time(10, 30), time(10, 30), time(2, 30))
     assert after["K28"].value == before["K28"].value  # formulas untouched
     assert "مرخصی ساعتی با حقوق" in messenger.texts_to(employee.chat_id)[-1]
@@ -284,3 +285,62 @@ async def test_the_admin_form_from_button_to_excel(session_factory, policy, cloc
     # Employees have no button and a forged press is refused
     await bot.press(emp_id, AdminCb(a="lr", v="0").pack())
     assert "اجازه" in bot.last_text(emp_id)
+
+
+async def test_the_note_is_added_after_an_existing_one(services, make_user, store) -> None:
+    content = org_workbook()
+    wb = openpyxl.load_workbook(io.BytesIO(content))
+    wb.worksheets[0]["Q28"] = "تعمیر کلید"
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    admin, employee, workbook = await _setup(services, make_user, content=buffer.getvalue())
+    await register_leave(services, admin, LeaveInput(employee.id, LeavePayType.UNPAID, LeaveUnit.DAILY, MEHR_27))
+    assert _row(store, workbook, 2)["توضیحات"] == "تعمیر کلید | مرخصی روزانه بدون حقوق"
+
+
+async def test_the_leave_shows_in_every_excel_export_of_that_person(services, make_user, store, clock) -> None:
+    """The exported timesheet takes E/F/G (where changed), I, J and the notes from the person's file;
+    clearing them in the file and uploading it again removes them from the export too."""
+    from app.application.use_cases.workbook_report import workbook_file_rows
+    from app.infrastructure.excel.timesheet import build_timesheet_workbook
+
+    admin, employee, workbook = await _setup(services, make_user)
+    await register_leave(
+        services, admin, LeaveInput(employee.id, LeavePayType.PAID, LeaveUnit.HOURLY, MEHR_27, time(8), time(10, 30))
+    )
+    report = await services.attendance.my_month(employee)
+
+    async def export_row() -> dict:
+        rows = await workbook_file_rows(services, [employee.id], report.start, report.end)
+        content = build_timesheet_workbook(
+            [report], services.attendance.sheet_rules, services.attendance.holidays, file_rows=rows
+        )
+        ws = openpyxl.load_workbook(io.BytesIO(content)).worksheets[0]
+        return {str(c.value): ws.cell(28, c.column).value for c in ws[1] if c.value}
+
+    row = await export_row()
+    assert (row[E], row[F], row[G]) == (time(10, 30), time(10, 30), time(16, 48))
+    assert row[J_EDGE] == time(2, 30) and row[I_MID] is None
+    assert "مرخصی ساعتی با حقوق ۰۸:۰۰ تا ۱۰:۳۰" in row["توضیحات"]
+
+    # Cancelled in Excel: the admin uploads the file with the cells cleared
+    wb = openpyxl.load_workbook(io.BytesIO(store.read(workbook.id, 2)))
+    for ref in ("E28", "F28"):
+        wb.worksheets[0][ref] = time(8) if ref == "E28" else time(9, 30)
+    wb.worksheets[0]["J28"] = None
+    wb.worksheets[0]["Q28"] = None
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    cleared = await services.workbooks.upload(admin, "maryam-cleared.xlsx", buffer.getvalue())
+    await services.workbooks.assign(admin, cleared.id, employee.id)
+    row = await export_row()
+    assert (row[E], row[F], row[J_EDGE]) == (time(8), time(9, 30), None)
+    assert not row["توضیحات"] or "مرخصی" not in row["توضیحات"]
+
+
+async def test_people_without_their_own_file_export_as_before(services, make_user, store, clock) -> None:
+    from app.application.use_cases.workbook_report import workbook_file_rows
+
+    employee = await make_user("بدون فایل")
+    report = await services.attendance.my_month(employee)
+    assert await workbook_file_rows(services, [employee.id], report.start, report.end) == {}
