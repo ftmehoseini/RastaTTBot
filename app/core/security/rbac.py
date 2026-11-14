@@ -26,10 +26,6 @@ ROLE_TITLES_FA: dict[RoleCode, str] = {
 class Permission(StrEnum):
     ATTENDANCE_SELF = "attendance.self"
     ATTENDANCE_REPORT_ALL = "attendance.report_all"
-    LEAVE_SELF = "leave.self"
-    LEAVE_APPROVE_STEP_1 = "leave.approve_step_1"
-    LEAVE_APPROVE_STEP_2 = "leave.approve_step_2"
-    LEAVE_REPORT_ALL = "leave.report_all"
     LEAVE_REGISTER = "leave.register"  # an admin registers a leave directly into the employee's Excel file
     FOOD_ORDER = "food.order"
     FOOD_MENU_MANAGE = "food.menu_manage"
@@ -40,15 +36,13 @@ class Permission(StrEnum):
     SYSTEM_HEALTH = "system.health"
 
 
-_EMPLOYEE = {Permission.ATTENDANCE_SELF, Permission.LEAVE_SELF, Permission.FOOD_ORDER}
+_EMPLOYEE = {Permission.ATTENDANCE_SELF, Permission.FOOD_ORDER}
 
 ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
     RoleCode.EMPLOYEE: frozenset(_EMPLOYEE),
     RoleCode.ADMIN_1_SECRETARY: frozenset(
         {
             Permission.ATTENDANCE_REPORT_ALL,
-            Permission.LEAVE_APPROVE_STEP_1,
-            Permission.LEAVE_REPORT_ALL,
             Permission.LEAVE_REGISTER,
             Permission.FOOD_MENU_MANAGE,
             Permission.FOOD_BROADCAST,
@@ -59,8 +53,6 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
     RoleCode.ADMIN_2_MANAGER: frozenset(
         {
             Permission.ATTENDANCE_REPORT_ALL,
-            Permission.LEAVE_APPROVE_STEP_2,
-            Permission.LEAVE_REPORT_ALL,
             Permission.LEAVE_REGISTER,
             Permission.FOOD_REPORT_ALL,
             Permission.USERS_VIEW,

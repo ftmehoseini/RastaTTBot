@@ -1,6 +1,5 @@
 """Attendance rules: live check-in/out, forgotten-entry corrections, daily calculation and reports."""
 
-from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from uuid import UUID
@@ -33,7 +32,6 @@ from app.core.utils.jalali import (
     month_range,
     week_range,
 )
-from app.core.utils.text import format_minutes
 from app.domain.attendance.calculation import (
     HOURLY_POLICY,
     DailyCalculation,
@@ -52,11 +50,9 @@ from app.domain.attendance.models import (
 )
 from app.domain.attendance.timesheet import SheetRules, sheet_month
 from app.domain.audit.models import AuditAction
-from app.domain.leave.models import LeavePayType, LeaveRequest, LeaveStatus, LeaveUnit
 from app.domain.users.models import User
 from app.infrastructure.repositories.attendance import AttendanceRepository
 from app.infrastructure.repositories.audit import AuditRepository
-from app.infrastructure.repositories.leave import LeaveRepository
 from app.infrastructure.repositories.users import UserRepository
 
 # A confirmed time may be at most this far in the future (clock skew between workers).
@@ -93,11 +89,9 @@ class AttendanceService:
     def __init__(self, session: AsyncSession, policy: Policy, time: TimeService):
         self.session = session
         self.policy = policy.attendance
-        self.leave_policy = policy.leave
         self.time = time
         self.records = AttendanceRepository(session)
         self.users = UserRepository(session)
-        self.leaves = LeaveRepository(session)
         self.audit = AuditRepository(session)
         self.schedules = ScheduleResolver(self.policy, organization_holidays(policy.organization))
         self.calculator = get_calculation_policy(self.policy.calculation_policy)
@@ -567,8 +561,7 @@ class AttendanceService:
     async def employee_report(self, user: User, start: date, end: date) -> EmployeeReport:
         records = await self.records.list_between(start, end, user.id)
         corrections = await self.records.corrections_between(start, end, user.id)
-        leaves = await self.leaves.list_filtered(start=start, end=end, statuses={LeaveStatus.APPROVED}, user_id=user.id)
-        return self._build_report(user, start, end, records, corrections, leaves)
+        return self._build_report(user, start, end, records, corrections)
 
     async def my_week(self, user: User) -> EmployeeReport:
         access.require(user, Permission.ATTENDANCE_SELF)
@@ -593,13 +586,11 @@ class AttendanceService:
             users = await self.users.list_active_employees()
         records = await self.records.list_between(start, end)
         corrections = await self.records.corrections_between(start, end)
-        leaves = await self.leaves.list_filtered(start=start, end=end, statuses={LeaveStatus.APPROVED})
         reports = []
         for u in users:
             mine = [r for r in records if r.user_id == u.id]
             mine_corr = [c for c in corrections if c.user_id == u.id]
-            mine_leave = [lv for lv in leaves if lv.user_id == u.id]
-            reports.append(self._build_report(u, start, end, mine, mine_corr, mine_leave))
+            reports.append(self._build_report(u, start, end, mine, mine_corr))
         self.audit.record(
             AuditAction.REPORT_GENERATED,
             "attendance_report",
@@ -630,11 +621,9 @@ class AttendanceService:
         end: date,
         records: list[AttendanceRecord],
         corrections: list[AttendanceManualCorrection],
-        leaves: Iterable[LeaveRequest] = (),
     ) -> EmployeeReport:
         today = self.time.today()
         by_date = {r.work_date: r for r in records}
-        leave_by_day = self._leave_by_day(leaves, start, end, user)
         notes: dict[date, list[str]] = {}
         for c in corrections:
             submitted = format_datetime(self.time.to_local(c.submitted_at))
@@ -662,8 +651,6 @@ class AttendanceService:
                     is_workday=is_workday,
                     correction_notes=notes.get(day, []),
                     is_today=day == today,
-                    paid_leave_minutes=leave_by_day.get(day, (0, None))[0],
-                    leave_note=leave_by_day.get(day, (0, None))[1],
                 )
             )
         sheet = None if user.is_hourly else sheet_month((r.sheet_day for r in rows), self.sheet_rules)
@@ -688,33 +675,6 @@ class AttendanceService:
             )
         return report
 
-    def _leave_by_day(
-        self, leaves: Iterable[LeaveRequest], start: date, end: date, user: User
-    ) -> dict[date, tuple[int, str]]:
-        """Approved leave per day: (paid minutes for column I of the timesheet, note)."""
-        result: dict[date, tuple[int, str]] = {}
-        for lv in leaves:
-            paid = lv.pay_type == LeavePayType.PAID
-            kind = "با حقوق" if paid else "بدون حقوق"
-            if lv.unit == LeaveUnit.HOURLY:
-                minutes = lv.duration_minutes or 0
-                label = f"مرخصی ساعتی {kind} {format_minutes(minutes)}"
-                days = [lv.start_date] if start <= lv.start_date <= end else []
-            else:
-                minutes = self.policy.standard_workday_minutes
-                label = f"مرخصی روزانه {kind}"
-                days = [
-                    d
-                    for d in iter_days(max(start, lv.start_date), min(end, lv.end_date))
-                    if self.leave_policy.count_non_workdays_in_daily_leave
-                    or self.schedules.is_workday(d, user.workday_codes)
-                ]
-            for d in days:
-                old_minutes, old_note = result.get(d, (0, ""))
-                note = f"{old_note} | {label}" if old_note else label
-                result[d] = (old_minutes + (minutes if paid else 0), note)
-        return result
-
     # --- reminders ---------------------------------------------------------------------
 
     def is_workday(self, day: date, user: User | None = None) -> bool:
@@ -723,19 +683,10 @@ class AttendanceService:
     def is_holiday(self, day: date) -> bool:
         return day in self.schedules.holidays
 
-    async def _on_daily_leave(self, day: date) -> set[UUID]:
-        leaves = await self.leaves.list_filtered(start=day, end=day, statuses={LeaveStatus.APPROVED})
-        return {lv.user_id for lv in leaves if lv.unit == LeaveUnit.DAILY}
-
     async def check_in_reminder_recipients(self, day: date) -> list[User]:
         employees = await self.users.list_active_employees()
         checked_in = await self.records.user_ids_checked_in_on(day)
-        on_leave = await self._on_daily_leave(day)
-        return [
-            u
-            for u in employees
-            if u.id not in checked_in and u.id not in on_leave and self.is_workday(day, u)  # own workdays
-        ]
+        return [u for u in employees if u.id not in checked_in and self.is_workday(day, u)]  # own workdays
 
     async def check_out_reminder_recipients(self, day: date) -> list[tuple[User, AttendanceRecord]]:
         open_records = await self.records.open_records_on(day)

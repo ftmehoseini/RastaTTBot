@@ -33,7 +33,6 @@ TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/rasta_bot_test .
 5. **Policy:** add a `MissionPolicy` section to `core/config/policy.py` and `config/default.yaml`.
 6. **Texts:** add `app/application/presenters/missions.py`.
 7. **Bot:** create `presentation/bot/handlers/missions.py` with `router = Router(name="missions")`, `router.message.filter(IsRegistered())` and `router.callback_query.filter(IsRegistered())`. Add callback classes in `callbacks/data.py`, states in `states/flows.py`, the main-menu button in `modules.py` (`MENU_ENTRIES`, with its visibility permission), and the router in `ROUTERS` in `dispatcher.py`, before `fallback.router`.
-8. **Approvals (if needed):** build a `WorkflowDefinition` (steps and roles), call `ApprovalService.start/decide/cancel` from the service, and register an `ApprovalHandler` under a short code in `handlers/approvals.py` (`HANDLERS["ms"] = MissionApprovalHandler()`). The ✅/❌ buttons, reason prompt, duplicate-click protection and history come for free.
 9. **Migration:** run `alembic revision --autogenerate -m "missions"`, review the file, then `alembic upgrade head`. Seed rows (like new roles) with `op.bulk_insert`.
 10. **Scheduled work (if needed):** a use case in `application/use_cases/`, a task in `infrastructure/tasks/jobs.py` wrapped in `run_exclusive`, a `beat_schedule` entry, and dedup keys on every notification.
 11. **Tests:** service tests with the `services`, `make_user` and `clock` fixtures, plus an end-to-end flow in the style of `test_bot_flows.py`.
@@ -69,7 +68,7 @@ Per-user or per-group schedules: give `users.schedule_code` a value and return a
 
 ## Sending notifications
 
-Use `services.notifications.notify_user(user, text, NotificationType.X, buttons=InlineButtons.of(...), dedup_key=...)` after committing. Give a `dedup_key` to anything that must not repeat (reminders, approval requests, broadcasts). Background jobs must never import `presentation`. Buttons they send use plain callback strings that a router handles (see `OPEN_ATTENDANCE` / `OPEN_FOOD`).
+Use `services.notifications.notify_user(user, text, NotificationType.X, buttons=InlineButtons.of(...), dedup_key=...)` after committing. Give a `dedup_key` to anything that must not repeat (reminders, broadcasts). Background jobs must never import `presentation`. Buttons they send use plain callback strings that a router handles (see `OPEN_ATTENDANCE` / `OPEN_FOOD`).
 
 ## Debugging
 

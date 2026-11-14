@@ -27,11 +27,9 @@ These were decided without asking, to keep work moving. Each one is configurable
 
 ## Leave
 
-- Two-step approval: `ADMIN_1_SECRETARY` then `ADMIN_2_MANAGER`. Any user holding the step's role may decide that step; every holder is notified. A user cannot approve their own request.
-- Leave requests can be for past dates up to `leave.max_past_days` (default 7) and future dates up to `leave.max_future_days` (default 90). **Confirm.**
-- Daily leave counts calendar days including non-workdays (`leave.count_non_workdays_in_daily_leave: true`). Hourly leave must start and end on the same day.
-- The employee can cancel their own request while it is still pending.
-- `leave_balances` exists but no balance rule is enforced yet (no policy was given).
+- Employees do not request leave in the bot. An admin registers it with «📝 ثبت مرخصی», and it is written only into the employee's Excel file (the rules are in WORKFLOWS.md). To cancel it, the admin clears the cells in the file and uploads it again.
+- A leave can be registered for dates up to `leave.max_past_days` (default 7) back and `leave.max_future_days` (default 90) ahead.
+- The old employee leave feature's tables (`leave_requests`, `leave_balances`, `approval_steps`, `workflow_actions`) are left in existing databases with their data; nothing reads them.
 
 ## Food
 
@@ -49,5 +47,5 @@ These were decided without asking, to keep work moving. Each one is configurable
 - Lunar holidays after the confirmed part of the official calendar are estimates (marked «تخمینی»); `organization.holiday_exceptions` / `holidays` correct a wrong one.
 - کارکرد نهایی uses the newest sheet's formula (آذر: + surplus × 0.8 − uncompensated × 1.6); مهر and آبان had the version without the factors. Set both factors to 0 for that version.
 - «مرخصی مجاز» (the leave allowance carried between months) is not tracked by the bot; the cell is left for the admin.
-- A day of approved paid daily leave counts 8:48 in «مرخصی با حقوق»; days are counted as `leave.count_non_workdays_in_daily_leave` says.
+- A registered daily leave writes the whole official day (G − E, 8:48) into «مرخصي اول و آخر».
 - The staff list number is a mobile number or a personnel code; mobile numbers in any format are stored as 09xxxxxxxxx.

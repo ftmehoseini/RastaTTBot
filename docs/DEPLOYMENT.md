@@ -54,7 +54,7 @@ nothing but the machine: separate containers, database, Redis, volumes and image
 | Git branch | `main` | `develop` |
 | `.env` `COMPOSE_PROJECT_NAME` | `rasta-admin-bot` | `rasta-bot-dev` |
 | `.env` `BOT_TOKEN` | the real bot | a separate test bot |
-| `.env` `BOT_MODULES` | `attendance` (check-in/out only) | `attendance,leave,food` |
+| `.env` `BOT_MODULES` | `attendance` (check-in/out only) | `attendance,food` |
 | `.env` `HEALTH_PORT` | `8080` | `8081` |
 | `.env` `WORKER_CONCURRENCY` | `2` | `1` |
 | Deploy | `./docker/deploy.sh` | `./docker/deploy.sh` (or `quick.sh`) |
@@ -115,8 +115,8 @@ sudo systemctl disable --now rastattbot   # stop the old bot so two bots don't p
 - [ ] `config/production.yaml`: workdays, start/end times, grace minutes, reminder times, food deadline, holidays for the year, payment details
 - [ ] `python -m app.cli check-config` output reviewed
 - [ ] Staff list uploaded (admin panel → «📋 فهرست کارکنان») before people are told to register
-- [ ] First SUPER_ADMIN logged in; ADMIN_1 (secretary) and ADMIN_2 (manager) roles assigned; each tried an approval
-- [ ] Test employee: check-in, check-out, forgotten entry, weekly report, leave request through both approvals, food order before and after the deadline, guest order
+- [ ] First SUPER_ADMIN logged in; ADMIN_1 (secretary) and ADMIN_2 (manager) roles assigned
+- [ ] Test employee: check-in, check-out, forgotten entry, weekly report, a leave registered by an admin (📝 ثبت مرخصی), food order before and after the deadline, guest order
 - [ ] Menu template downloaded, filled and uploaded; broadcast sent to a test group first
 - [ ] Reminders observed at the configured times on a workday (check `notification_logs`)
 - [ ] Backup cron installed, first backup file exists, restore drill done, off-server copy configured

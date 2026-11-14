@@ -29,7 +29,9 @@ PLATFORM_MAX_BUTTONS_PER_ROW: dict[BotPlatform, int] = {
 }
 
 
-BOT_MODULES = ("attendance", "leave", "food")
+BOT_MODULES = ("attendance", "food")
+# Sections that no longer exist; still accepted in BOT_MODULES (and ignored) so older .env files work.
+RETIRED_MODULES = ("leave",)
 
 
 class Settings(BaseSettings):
@@ -47,7 +49,7 @@ class Settings(BaseSettings):
     bot_max_buttons_per_row: int = Field(default=0, ge=0, le=8)
     # Sections this bot offers, e.g. "attendance" for a production bot that only does check-in/out.
     # Attendance, registration and the admin panel are always on.
-    bot_modules: str = "attendance,leave,food"
+    bot_modules: str = "attendance,food"
 
     database_url: str = "postgresql+asyncpg://rasta_bot:change-me@localhost:5432/rasta_bot"
     database_echo: bool = False
@@ -79,7 +81,7 @@ class Settings(BaseSettings):
     @field_validator("bot_modules")
     @classmethod
     def _check_modules(cls, value: str) -> str:
-        unknown = {m.strip() for m in value.split(",") if m.strip()} - set(BOT_MODULES)
+        unknown = {m.strip() for m in value.split(",") if m.strip()} - set(BOT_MODULES) - set(RETIRED_MODULES)
         if unknown:
             raise ValueError(f"unknown BOT_MODULES {sorted(unknown)}; choose from {list(BOT_MODULES)}")
         return value
@@ -90,7 +92,8 @@ class Settings(BaseSettings):
 
     @property
     def enabled_modules(self) -> frozenset[str]:
-        return frozenset({"attendance"} | {m.strip() for m in self.bot_modules.split(",") if m.strip()})
+        listed = {m.strip() for m in self.bot_modules.split(",") if m.strip()}
+        return frozenset(({"attendance"} | listed) - set(RETIRED_MODULES))
 
     @property
     def max_buttons_per_row(self) -> int:

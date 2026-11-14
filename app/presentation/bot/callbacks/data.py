@@ -25,13 +25,13 @@ class CorrCb(CallbackData, prefix="cor"):
 
 
 class CalCb(CallbackData, prefix="cal"):
-    p: str  # purpose, e.g. corr | lv_s | lv_e | rep_s | rep_e
+    p: str  # purpose, e.g. corr | lr_d | rep_s | rep_e
     a: str  # d (pick day) | m (show month)
     v: int  # date ordinal for "d"; year*100+month for "m"
 
 
 class TimeCb(CallbackData, prefix="tm"):
-    p: str  # purpose, e.g. corr_in | corr_out | lv_s | lv_e
+    p: str  # purpose, e.g. corr_in | corr_out
     a: str  # h (hour picked) | m (minute picked)
     h: int = 0
     m: int = 0
@@ -44,18 +44,6 @@ class KeyCb(CallbackData, prefix="kp"):
     v: str = ""  # digits so far, 0–3 of them
     a: str = "d"  # d (digit) | del (backspace)
     d: int = 0
-
-
-class LeaveCb(CallbackData, prefix="lv"):
-    a: str  # new | pay | unit | back | skip_reason | submit | mine | status | view | cancel
-    v: str = ""
-
-
-class ApprovalCb(CallbackData, prefix="ap"):
-    w: str  # workflow code: lv
-    e: str  # entity id (hex)
-    s: int  # step order
-    a: str  # y (approve) | n (reject)
 
 
 class FoodCb(CallbackData, prefix="fd"):

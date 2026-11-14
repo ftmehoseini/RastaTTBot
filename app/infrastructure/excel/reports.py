@@ -1,15 +1,12 @@
 """Excel report builders. Input is service DTOs; output is .xlsx bytes. No bot or DB code here."""
 
-from collections.abc import Callable, Sequence
-from datetime import date, datetime
-from uuid import UUID
+from collections.abc import Sequence
+from datetime import date
 
 from app.application.dto.attendance import EmployeeReport
 from app.application.dto.food import FoodReportRow, Invoice
-from app.core.utils.jalali import format_date_numeric, to_jalali, weekday_name
+from app.core.utils.jalali import to_jalali, weekday_name
 from app.domain.attendance.models import DayStatus, RecordSource
-from app.domain.leave.models import PAY_TYPE_FA, STATUS_FA, UNIT_FA, LeaveRequest
-from app.domain.users.models import User
 from app.infrastructure.excel.styles import (
     MONEY_FORMAT,
     Column,
@@ -166,54 +163,6 @@ def build_attendance_workbook(reports: Sequence[EmployeeReport]) -> bytes:
 
 
 # --- leave ----------------------------------------------------------------------------------
-
-
-def build_leave_workbook(
-    requests: Sequence[LeaveRequest], users: dict[UUID, User], to_local: Callable[[datetime], datetime]
-) -> bytes:
-    workbook = new_workbook()
-    columns = [
-        Column("شماره", 8),
-        Column("نام کارمند", 22),
-        Column("نوع", 10),
-        Column("واحد", 9),
-        Column("از تاریخ", 12),
-        Column("تا تاریخ", 12),
-        Column("از ساعت", 8),
-        Column("تا ساعت", 8),
-        Column("تعداد روز", 9),
-        Column("مدت (ساعت)", 10),
-        Column("وضعیت", 18),
-        Column("دلیل", 30),
-        Column("دلیل رد", 30),
-        Column("تاریخ ثبت", 12),
-    ]
-    rows = []
-    for r in requests:
-        user = users.get(r.user_id)
-        rows.append(
-            [
-                r.display_number,
-                user.full_name if user else "",
-                PAY_TYPE_FA[r.pay_type],
-                UNIT_FA[r.unit],
-                _j(r.start_date),
-                _j(r.end_date),
-                r.start_time.strftime("%H:%M") if r.start_time else "",
-                r.end_time.strftime("%H:%M") if r.end_time else "",
-                r.days_count or "",
-                minutes_cell(r.duration_minutes),
-                STATUS_FA[r.status],
-                r.reason or "",
-                r.rejection_reason or "",
-                format_date_numeric(to_local(r.submitted_at).date(), persian_digits=False),
-            ]
-        )
-    add_table_sheet(workbook, "مرخصی‌ها", columns, rows, first=True)
-    return to_bytes(workbook)
-
-
-# --- food -------------------------------------------------------------------------------------
 
 
 def build_food_orders_workbook(rows: Sequence[FoodReportRow]) -> bytes:

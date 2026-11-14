@@ -144,14 +144,10 @@ class AttendancePolicy(BaseModel):
 
 
 class LeavePolicy(BaseModel):
-    require_rejection_reason: bool = True
-    allow_overlapping_leave_requests: bool = False
+    """«📝 ثبت مرخصی» in the admin panel: how far back and ahead a leave can be registered."""
+
     max_past_days: int = Field(default=7, ge=0)
     max_future_days: int = Field(default=90, ge=0)
-    max_daily_leave_days: int = Field(default=30, ge=1)
-    count_non_workdays_in_daily_leave: bool = True
-    min_rejection_reason_length: int = Field(default=3, ge=1)
-    max_reason_length: int = Field(default=500, ge=10)
 
 
 class FoodPolicy(BaseModel):

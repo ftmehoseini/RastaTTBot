@@ -267,8 +267,6 @@ async def test_hourly_staff_only_track_worked_time(services, make_user, clock) -
 
 
 async def test_month_report_follows_the_excel_summary(services, make_user, clock) -> None:
-    from app.domain.leave.models import LeavePayType, LeaveRequest, LeaveStatus, LeaveUnit
-
     user = await make_user()
     clock.set(tehran(2026, 10, 19, 20, 0))
     # 18/10: in 10:00 → 0:30 unauthorized late; out 18:00 → 1:12 overtime
@@ -279,32 +277,16 @@ async def test_month_report_follows_the_excel_summary(services, make_user, clock
     await services.attendance.submit_correction(
         user, CorrectionInput(CorrectionType.BOTH, date(2026, 10, 17), time(8, 30), time(16, 0))
     )
-    services.session.add(
-        LeaveRequest(
-            user_id=user.id,
-            pay_type=LeavePayType.PAID,
-            unit=LeaveUnit.HOURLY,
-            start_date=date(2026, 10, 18),
-            end_date=date(2026, 10, 18),
-            start_time=time(16, 0),
-            end_time=time(18, 0),
-            starts_at=tehran(2026, 10, 18, 16, 0),
-            ends_at=tehran(2026, 10, 18, 18, 0),
-            duration_minutes=120,
-            status=LeaveStatus.APPROVED,
-            submitted_at=tehran(2026, 10, 18, 9, 0),
-        )
-    )
-    await services.session.commit()
     month = await services.attendance.my_month(user)
     m = month.sheet
-    assert (m.floating_late, m.late, m.early, m.overtime, m.paid_leave) == (30 + 90, 30, 48, 72, 120)
+    assert (m.floating_late, m.late, m.early, m.overtime, m.paid_leave) == (30 + 90, 30, 48, 72, 0)
     assert m.compensable == 120 + 30 + 48
     assert m.uncompensated == 198 - 72
-    # The organization's current formula (آبان): normal + MIN(overtime, compensable) + leave, no factors
-    assert m.final_work == m.normal + min(72, m.compensable) + 120
+    # The organization's current formula (آبان): normal + MIN(overtime, compensable) + leave, no factors.
+    # Leave exists only in the employee's Excel file (admin panel → ثبت مرخصی), not in the bot's own figures.
+    assert m.final_work == m.normal + min(72, m.compensable)
     row = next(r for r in month.rows if r.work_date == date(2026, 10, 18))
-    assert row.paid_leave_minutes == 120 and "مرخصی ساعتی با حقوق" in row.leave_note
+    assert row.paid_leave_minutes == 0 and row.leave_note is None
 
 
 async def test_edit_a_registered_time(services, make_user, clock) -> None:

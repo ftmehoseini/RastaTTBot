@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.dto.messaging import Messenger
 from app.application.services.attendance_service import AttendanceService
 from app.application.services.food_service import FoodService
-from app.application.services.leave_service import LeaveService
 from app.application.services.notification_service import NotificationService
 from app.application.services.user_service import UserService
 from app.application.services.workbook_service import WorkbookService
@@ -39,10 +38,6 @@ class Services:
     @cached_property
     def attendance(self) -> AttendanceService:
         return AttendanceService(self.session, self.policy, self.time)
-
-    @cached_property
-    def leave(self) -> LeaveService:
-        return LeaveService(self.session, self.policy, self.time)
 
     @cached_property
     def food(self) -> FoodService:

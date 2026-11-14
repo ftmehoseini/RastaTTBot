@@ -72,14 +72,10 @@ attendance:
     - "میزان تاخیر و تعجیل جبران نشده"
 
 leave:
-  require_rejection_reason: true
-  allow_overlapping_leave_requests: false
+  # «📝 ثبت مرخصی» in the admin panel (written into the employee's Excel file): the date may be
+  # this many days back or ahead
   max_past_days: 7
   max_future_days: 90
-  max_daily_leave_days: 30
-  count_non_workdays_in_daily_leave: true
-  min_rejection_reason_length: 3
-  max_reason_length: 500
 
 food:
   ordering_deadline_time: "10:00"

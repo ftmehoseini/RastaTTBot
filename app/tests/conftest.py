@@ -13,6 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import app.domain.models  # noqa: F401
@@ -22,7 +23,6 @@ from app.core.config.policy import Policy, load_policy
 from app.core.database import Base, create_engine, create_session_factory
 from app.core.security.rbac import RoleCode
 from app.core.utils.clock import FixedClock, TimeService
-from app.domain.leave.models import LeaveRequest
 from app.domain.users.models import EmployeeRosterEntry, User
 
 TEHRAN = ZoneInfo("Asia/Tehran")
@@ -71,10 +71,13 @@ def messenger() -> FakeMessenger:
 async def engine() -> AsyncIterator[AsyncEngine]:
     url = os.environ.get("TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
     db_engine = create_engine(url)
-    if url.startswith("sqlite"):
-        # SQLite has no identity columns; PostgreSQL generates leave numbers.
-        LeaveRequest.__table__.c.number.nullable = True
     async with db_engine.begin() as conn:
+        if url.startswith("postgresql"):
+            # A test database used before the employee leave feature was removed still has its tables,
+            # which reference users and would stop drop_all. Only the throwaway test database is touched.
+            await conn.execute(
+                text("DROP TABLE IF EXISTS leave_requests, leave_balances, approval_steps, workflow_actions CASCADE")
+            )
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield db_engine

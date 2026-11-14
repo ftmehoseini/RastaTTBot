@@ -2,11 +2,7 @@ from datetime import date, time
 
 from sqlalchemy import select
 
-from app.application.dto.leave import LeaveDraft
 from app.application.use_cases.reminders import send_check_in_reminders, send_check_out_reminders
-from app.core.security.rbac import RoleCode
-from app.domain.approvals.engine import Decision
-from app.domain.leave.models import LeavePayType, LeaveUnit
 from app.domain.notifications.models import NotificationLog, NotificationStatus
 from app.tests.conftest import tehran
 
@@ -15,16 +11,6 @@ async def test_check_in_reminder_selects_only_missing_employees(services, make_u
     present = await make_user("حاضر")
     absent = await make_user("غایب")
     inactive = await make_user("غیرفعال", active=False)
-    on_leave = await make_user("مرخصی")
-    secretary = await make_user("منشی", RoleCode.ADMIN_1_SECRETARY)
-    manager = await make_user("مدیر", RoleCode.ADMIN_2_MANAGER)
-
-    clock.set(tehran(2026, 10, 18, 9, 0))
-    draft = LeaveDraft(LeavePayType.PAID, LeaveUnit.DAILY, date(2026, 10, 19), date(2026, 10, 19))
-    submitted = await services.leave.submit(on_leave, draft)
-    await services.leave.decide(secretary, submitted.request.id, 1, Decision.APPROVE)
-    await services.leave.decide(manager, submitted.request.id, 2, Decision.APPROVE)
-
     clock.set(tehran(2026, 10, 19, 9, 0))
     preview = await services.attendance.preview_check_in(present)
     await services.attendance.check_in(present, preview.at_utc)
@@ -34,7 +20,6 @@ async def test_check_in_reminder_selects_only_missing_employees(services, make_u
     assert absent.id in ids
     assert present.id not in ids
     assert inactive.id not in ids
-    assert on_leave.id not in ids
 
 
 async def test_check_in_reminder_is_idempotent_and_respects_time(services, make_user, clock, messenger) -> None:

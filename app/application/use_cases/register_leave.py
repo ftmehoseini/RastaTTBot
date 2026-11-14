@@ -10,7 +10,7 @@ leave, the admin downloads the file, clears the cells and uploads it again.
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, time, timedelta
 from uuid import UUID
 
 from app.application.services import access
@@ -71,6 +71,13 @@ class LeavePlan:
     cells: LeaveCells
 
 
+def leave_date_window(services: Services) -> tuple[date, date]:
+    """Leave can be registered from `leave.max_past_days` ago to `leave.max_future_days` ahead."""
+    today = services.time.today()
+    policy = services.policy.leave
+    return today - timedelta(days=policy.max_past_days), today + timedelta(days=policy.max_future_days)
+
+
 def _minutes(value: time) -> int:
     return value.hour * 60 + value.minute
 
@@ -113,7 +120,7 @@ async def plan_leave(services: Services, actor: User, data: LeaveInput) -> Leave
         raise NotFoundError("کارمند پیدا نشد یا غیرفعال است.")
     if employee.is_hourly:
         raise ValidationError("ثبت مرخصی فقط برای کارکنان تمام‌وقت است.")
-    earliest, latest = services.leave.date_window()
+    earliest, latest = leave_date_window(services)
     if not earliest <= data.day <= latest:
         raise ValidationError(f"تاریخ مرخصی باید بین {format_date(earliest)} و {format_date(latest)} باشد.")
     workbook = await services.workbooks.for_user(employee.id)

@@ -12,7 +12,6 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import text
 
 from app.application.presenters import attendance as att_texts
-from app.application.presenters import leave as leave_texts
 from app.application.services import access
 from app.application.services.container import Services
 from app.application.use_cases.register_leave import (
@@ -20,6 +19,7 @@ from app.application.use_cases.register_leave import (
     LeaveInput,
     describe,
     full_time_employees,
+    leave_date_window,
     plan_leave,
     register_leave,
 )
@@ -30,13 +30,12 @@ from app.core.exceptions import AppError, ExpiredActionError, NotFoundError, Per
 from app.core.security.rbac import ROLE_TITLES_FA, Permission, RoleCode, is_admin
 from app.core.utils.jalali import format_date, format_date_numeric, month_range, previous_month_range, week_range
 from app.core.utils.text import to_persian_digits
-from app.domain.leave.models import OPEN_LEAVE_STATUSES, LeavePayType, LeaveUnit
+from app.domain.leave.models import LeavePayType, LeaveUnit
 from app.domain.notifications.models import NotificationType
 from app.domain.users.models import User
-from app.infrastructure.excel.reports import build_leave_workbook, report_filename
+from app.infrastructure.excel.reports import report_filename
 from app.infrastructure.excel.roster import build_roster_workbook, parse_roster
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
-from app.infrastructure.integrations.messenger import to_markup
 from app.infrastructure.tasks import dispatch
 from app.presentation.api.health import check_redis
 from app.presentation.bot.callbacks.data import AdminCb, CalCb, NavCb, UserAdminCb
@@ -50,11 +49,10 @@ from app.presentation.bot.handlers.common import (
     show,
     start_picker,
 )
-from app.presentation.bot.handlers.leave import approval_buttons
 from app.presentation.bot.keyboards.common import back_row, button, chunk, confirm_rows, inline, step_row
 from app.presentation.bot.keyboards.pickers import calendar_for
 from app.presentation.bot.middlewares.filters import IsRegistered
-from app.presentation.bot.modules import BTN_ADMIN, module_enabled
+from app.presentation.bot.modules import BTN_ADMIN
 from app.presentation.bot.states.flows import LeaveRegister, ReportRange, RosterUpload, WorkbookUpload
 
 router = Router(name="admin")
@@ -84,18 +82,6 @@ def panel_markup(user: User):
             [
                 button("📅 بازه‌ی دلخواه", AdminCb(a="att_range").pack()),
                 button("👤 گزارش یک کارمند", AdminCb(a="att_emp", v="0").pack()),
-            ]
-        )
-    leave_on = module_enabled("leave")
-    if leave_on and (
-        access.can(user, Permission.LEAVE_APPROVE_STEP_1) or access.can(user, Permission.LEAVE_APPROVE_STEP_2)
-    ):
-        rows.append([button("📥 کارتابل مرخصی", AdminCb(a="lv_inbox").pack())])
-    if leave_on and access.can(user, Permission.LEAVE_REPORT_ALL):
-        rows.append(
-            [
-                button("📤 مرخصی‌های ماه جاری", AdminCb(a="lv_xls", v="month").pack()),
-                button("📤 مرخصی‌های باز", AdminCb(a="lv_xls", v="open").pack()),
             ]
         )
     if access.can(user, Permission.LEAVE_REGISTER):
@@ -271,48 +257,6 @@ async def attendance_employee_report(
     start, end, title = _period(services, code)
     target = await services.users.get(UUID(hex=hex_id))
     await _send_attendance(query, services, user, start, end, f"{title} — {target.full_name}", target.id)
-
-
-# --- leave inbox and export -------------------------------------------------------------------------
-
-
-@router.callback_query(AdminCb.filter(F.a == "lv_inbox"))
-async def leave_inbox(query: CallbackQuery, services: Services, user: User) -> None:
-    requests = await services.leave.pending_for(user)
-    if not requests:
-        await show(query, "📥 درخواستی در انتظار بررسی شما نیست.", inline([back_row("admin")]))
-        return
-    await show(query, f"📥 {to_persian_digits(len(requests))} درخواست در انتظار بررسی:", inline([back_row("admin")]))
-    employees = await services.leave.users_by_id({r.user_id for r in requests})
-    message = query_message(query)
-    for request in requests[:15]:
-        step = await services.leave.current_step(request.id)
-        if step is None:
-            continue
-        title = services.leave.workflow.step(step.step_order).title_fa
-        await message.answer(
-            leave_texts.request_details(request, employees.get(request.user_id), title),
-            reply_markup=to_markup(approval_buttons(request, step.step_order)),
-        )
-
-
-@router.callback_query(AdminCb.filter(F.a == "lv_xls"))
-async def leave_export(query: CallbackQuery, callback_data: AdminCb, services: Services, user: User) -> None:
-    today = services.time.today()
-    if callback_data.v == "open":
-        start, end, statuses, label = None, None, set(OPEN_LEAVE_STATUSES), "open"
-    else:
-        start, end = month_range(today)
-        statuses, label = None, "month"
-    requests = await services.leave.list_for_report(user, start, end, statuses)
-    users = await services.leave.users_by_id({r.user_id for r in requests})
-    await query.answer("در حال آماده‌سازی فایل…")
-    message = query_message(query)
-    await message.answer(f"📤 تعداد درخواست‌ها: {to_persian_digits(len(requests))}")
-    s, e = (start, end) if start and end else (today, today)
-    await send_file(
-        message, build_leave_workbook(requests, users, services.time.to_local), report_filename(f"leave_{label}", s, e)
-    )
 
 
 # --- users and roles ----------------------------------------------------------------------------------
@@ -872,7 +816,7 @@ async def leave_register_unit(
     """Step 4: the date (both kinds); hourly then asks for x and y."""
     access.require(user, Permission.LEAVE_REGISTER)
     await state.update_data(lr_unit=LeaveUnit(callback_data.v).value, lr_x=None, lr_y=None)
-    min_date, max_date = services.leave.date_window()
+    min_date, max_date = leave_date_window(services)
     back = AdminCb(a="lr_t", v=(await state.get_data()).get("lr_pay", "PAID")).pack()
     await start_picker(state, min_date, max_date, back=back)
     await show(
@@ -883,7 +827,7 @@ async def leave_register_unit(
 
 
 async def _leave_register_date(target, state: FSMContext, services: Services, user: User, day: date) -> None:
-    min_date, max_date = services.leave.date_window()
+    min_date, max_date = leave_date_window(services)
     if not min_date <= day <= max_date:
         await reply(target, f"❌ تاریخ باید بین {format_date(min_date)} و {format_date(max_date)} باشد.")
         return

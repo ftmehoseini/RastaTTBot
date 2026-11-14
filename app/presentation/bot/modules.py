@@ -12,7 +12,6 @@ from app.domain.users.models import User
 from app.presentation.bot.keyboards.common import BTN_HELP, reply_menu
 
 BTN_ATTENDANCE = "⏱ ورود و خروج"
-BTN_LEAVE = "📝 مرخصی"
 BTN_FOOD = "🍽 سفارش غذا"
 BTN_ADMIN = "🛠 پنل مدیریت"
 
@@ -35,7 +34,6 @@ def _perm(permission: Permission) -> Callable[[User], bool]:
 
 MENU_ENTRIES: list[MenuEntry] = [
     MenuEntry(BTN_ATTENDANCE, 10, _perm(Permission.ATTENDANCE_SELF), "attendance"),
-    MenuEntry(BTN_LEAVE, 20, _perm(Permission.LEAVE_SELF), "leave"),
     MenuEntry(BTN_FOOD, 30, _perm(Permission.FOOD_ORDER), "food"),
     MenuEntry(BTN_ADMIN, 90, lambda user: user.is_active and is_admin(user.roles)),
 ]
@@ -44,7 +42,7 @@ MENU_ENTRIES: list[MenuEntry] = [
 def main_menu(user: User) -> ReplyKeyboardMarkup:
     entries = sorted(MENU_ENTRIES, key=lambda e: e.order)
     labels = [e.label for e in entries if module_enabled(e.module) and e.visible(user)]
-    # Soroush draws rows left to right, so each pair is reversed: «ورود و خروج» on the right, «مرخصی» left.
+    # Soroush draws rows left to right, so each pair is reversed: the first button ends up on the right.
     rows = [labels[i : i + 2][::-1] for i in range(0, len(labels), 2)]
     rows.append([BTN_HELP])
     return reply_menu(rows)
@@ -55,8 +53,6 @@ def help_text() -> str:
     lines.append(
         f"{BTN_ATTENDANCE}: ثبت ورود و خروج امروز (اتوماتیک یا دستی)، ویرایش، ثبت فراموشی، گزارش هفتگی و ماهانه"
     )
-    if module_enabled("leave"):
-        lines.append(f"{BTN_LEAVE}: درخواست مرخصی ساعتی یا روزانه و پیگیری وضعیت آن")
     if module_enabled("food"):
         lines.append(f"{BTN_FOOD}: دیدن منوی هفته، سفارش غذا و مهمان، صورت‌حساب")
     lines += ["", "دستورها:", "/start شروع یا نمایش منوی اصلی", "/myid نمایش شناسه‌ی شما", "/cancel لغو عملیات جاری"]

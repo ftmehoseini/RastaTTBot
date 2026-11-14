@@ -22,9 +22,9 @@ from app.tests.test_food import VALID_ROWS, menu_file
 def test_role_permission_matrix() -> None:
     assert has_permission([RoleCode.EMPLOYEE], Permission.ATTENDANCE_SELF)
     assert not has_permission([RoleCode.EMPLOYEE], Permission.ATTENDANCE_REPORT_ALL)
-    assert has_permission([RoleCode.ADMIN_1_SECRETARY], Permission.LEAVE_APPROVE_STEP_1)
-    assert not has_permission([RoleCode.ADMIN_1_SECRETARY], Permission.LEAVE_APPROVE_STEP_2)
-    assert has_permission([RoleCode.ADMIN_2_MANAGER], Permission.LEAVE_APPROVE_STEP_2)
+    assert has_permission([RoleCode.ADMIN_1_SECRETARY], Permission.LEAVE_REGISTER)
+    assert has_permission([RoleCode.ADMIN_2_MANAGER], Permission.LEAVE_REGISTER)
+    assert not has_permission([RoleCode.EMPLOYEE], Permission.LEAVE_REGISTER)
     assert not has_permission([RoleCode.ADMIN_2_MANAGER], Permission.FOOD_MENU_MANAGE)
     assert not has_permission([RoleCode.ADMIN_1_SECRETARY], Permission.USERS_MANAGE_ROLES)
     assert permissions_for([RoleCode.SUPER_ADMIN]) == frozenset(Permission)
@@ -152,10 +152,10 @@ async def test_attendance_excel_has_rtl_header_and_filter(services, make_user, c
 
 def test_main_menu_puts_attendance_on_the_right() -> None:
     from app.domain.users.models import Role, User, UserRole
-    from app.presentation.bot.modules import BTN_ATTENDANCE, BTN_LEAVE, main_menu
+    from app.presentation.bot.modules import BTN_ATTENDANCE, BTN_FOOD, main_menu
 
     user = User(full_name="مریم کریمی", is_active=True)
     user.role_links = [UserRole(role=Role(code=RoleCode.EMPLOYEE, title="کارمند"))]
     first_row = [b.text for b in main_menu(user).keyboard[0]]
     # Soroush draws rows left to right, so the last button of the row is the one on the right.
-    assert first_row == [BTN_LEAVE, BTN_ATTENDANCE]
+    assert first_row == [BTN_FOOD, BTN_ATTENDANCE]

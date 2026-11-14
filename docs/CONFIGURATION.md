@@ -73,7 +73,7 @@ Restart the bot, worker **and** beat after changing either file. In Docker: `doc
 | `floating_check_in_until` | `09:30` | `floating_window` only: check-in until this time is allowed lateness (تأخیر مجاز) |
 | `monthly_unauthorized_late_cap_minutes` | `420` | Monthly cap on unauthorized lateness, shown in month reports (0 = no cap) |
 | `monthly_early_departure_cap_minutes` | `180` | Monthly cap on early departure (تعجیل), shown in month reports (0 = no cap) |
-| `final_work_surplus_factor` / `final_work_penalty_factor` | `0.8` / `1.6` | کارکرد نهایی: + overtime surplus × the first − uncompensated lateness × the second (0 = leave the term out) |
+| `final_work_surplus_factor` / `final_work_penalty_factor` | `0` / `0` | کارکرد نهایی: + overtime surplus × the first − uncompensated lateness × the second (0 = leave the term out) |
 | `max_shift_hours` | `16` | Longest allowed shift; a check-out after midnight belongs to the previous day within this limit |
 | `allow_checkout_without_checkin` | `false` | Allow check-out on a day without check-in |
 | `live_confirmation_ttl_seconds` | `300` | How long a check-in/out confirm button stays valid |
@@ -131,15 +131,11 @@ On non-workdays and holidays, required minutes, lateness and early departure are
 
 ### leave
 
+Used only by «📝 ثبت مرخصی» in the admin panel.
+
 | Key | Default | Meaning |
 |---|---|---|
-| `require_rejection_reason` | `true` | Admins must write a reason to reject |
-| `min_rejection_reason_length` | `3` | Minimum reason length |
-| `allow_overlapping_leave_requests` | `false` | Allow requests overlapping pending/approved ones |
-| `max_past_days` / `max_future_days` | `7` / `90` | Allowed date window for new requests |
-| `max_daily_leave_days` | `30` | Longest daily leave in one request |
-| `count_non_workdays_in_daily_leave` | `true` | Count Fridays/holidays inside a daily leave |
-| `max_reason_length` | `500` | Longest description/reason stored |
+| `max_past_days` / `max_future_days` | `7` / `90` | How far back and ahead a leave can be registered |
 
 ### food
 

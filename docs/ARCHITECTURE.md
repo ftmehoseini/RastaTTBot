@@ -13,12 +13,11 @@ app/
     utils/              clock.py (UTC ↔ Tehran), jalali.py (the only calendar code), text.py
   domain/               ORM models, enums and pure rules per bounded context
     users/ audit/ notifications/
-    approvals/          generic step workflow: models + engine.py (pure state machine)
     attendance/         records, corrections, daily summaries, calculation.py (strategies)
     leave/  food/       (report data shapes live in application/dto, builders in infrastructure/excel)
     models.py           imports every model (Alembic, tests)
   application/          use-case logic, independent of Telegram
-    services/           AttendanceService, LeaveService, FoodService, ApprovalService,
+    services/           AttendanceService, FoodService, WorkbookService,
                         NotificationService, UserService, access.py (permission checks),
                         container.py (per-request service factory)
     use_cases/          multi-service jobs: reminders, food broadcast
@@ -66,13 +65,16 @@ Telegram/Bale update
 
 `preview_check_in` shows the Tehran time and puts its UTC epoch in the confirm button. `check_in` accepts that time only within `live_confirmation_ttl_seconds`. It locks the day's record (`SELECT … FOR UPDATE`, falling back to the unique constraint on an insert race), writes the punch, refreshes `attendance_daily_summaries` and commits. A second tap returns the existing record.
 
-### Leave approval
+### Leave registered by an admin
 
-`LeaveService.submit` creates the request and its `approval_steps` (step 1 PENDING, step 2 WAITING). Secretaries are notified with ✅/❌ buttons. `ApprovalService.decide` locks the steps and runs the pure engine. The engine refuses stale steps, wrong roles and missing rejection reasons. The leave status is updated in the same transaction, then the employee and the next approvers are notified.
+`use_cases/register_leave.py`: an admin picks a full-time employee, the type, daily or hourly and the
+times; `domain/leave/excel_rules.py` decides which cells of that day's row change; they are written into
+a new version of the employee's Excel file, with a note in «توضیحات», and recorded in the audit log.
+There are no leave requests or approvals.
 
 ### Reminders
 
-Beat → `attendance.check_in_reminders` (every 10 minutes) → Redis lock → `send_check_in_reminders`: is today a workday, is the reminder due (configured time ≤ now < time + catch-up), who is missing (active employees − checked in − on approved daily leave) → `notify_many` with dedup key `check_in_reminder:<date>:<user>` → one `notification_logs` row per person per day.
+Beat → `attendance.check_in_reminders` (every 10 minutes) → Redis lock → `send_check_in_reminders`: is today a workday, is the reminder due (configured time ≤ now < time + catch-up), who is missing (active employees − checked in) → `notify_many` with dedup key `check_in_reminder:<date>:<user>` → one `notification_logs` row per person per day.
 
 ### Menu import
 
@@ -85,7 +87,6 @@ Excel upload → size and extension checks → `parse_menu` validates (headers, 
 | New module / main-menu button | `presentation/bot/modules.py` (`MENU_ENTRIES`) + a router in `dispatcher.py` |
 | New permission | `Permission` + `ROLE_PERMISSIONS` in `core/security/rbac.py` |
 | New role | `RoleCode`, `ROLE_TITLES_FA`, `ROLE_PERMISSIONS`, a migration that inserts the row |
-| New approval workflow | a `WorkflowDefinition` + an `ApprovalHandler` registered in `handlers/approvals.py` (`HANDLERS`) |
 | Different attendance formula | implement `CalculationPolicy`, register it in `CALCULATION_POLICIES`, set `attendance.calculation_policy` |
 | Per-user or per-group schedules | `ScheduleResolver.for_day` (`users.schedule_code` already exists) |
 | New scheduled job | a task in `infrastructure/tasks/jobs.py` + an entry in `beat_schedule` |
@@ -99,7 +100,6 @@ Excel upload → size and extension checks → `parse_menu` validates (headers, 
 |---|---|
 | Double-tap on a confirm button | per-user update lock + idempotent services (existing record returned) |
 | Two requests creating the same day/order | unique constraints (`user_id, work_date`), (`user_id, order_date`) + savepoint retry |
-| Two admins approving at once | `SELECT … FOR UPDATE` on approval steps; the engine rejects a non-current step |
 | Stale buttons after a decision | engine `ConflictError` → "already reviewed" alert |
 | Duplicate reminders / broadcasts | unique `notification_logs.dedup_key`, claimed and committed before sending; Redis lock per job |
 | Worker crash mid-broadcast | re-running resumes: SENT keys are skipped, FAILED keys retried up to `max_send_retries` |

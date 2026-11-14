@@ -4,7 +4,7 @@ All user-facing text is Persian. Every multi-step flow has a «✖️ لغو» b
 
 ## Main menu (reply keyboard)
 
-`⏱ ورود و خروج` · `📝 مرخصی` · `🍽 سفارش غذا` · `🛠 پنل مدیریت` (admins only) · `ℹ️ راهنما`
+`⏱ ورود و خروج` · `🍽 سفارش غذا` · `🛠 پنل مدیریت` (admins only) · `ℹ️ راهنما`
 
 Buttons are shown according to the user's permissions (`presentation/bot/modules.py`). Commands: `/start`, `/myid`, `/whoami`, `/help`, `/cancel`, `/user <id>` (admins), `/health` (super admin).
 
@@ -22,7 +22,7 @@ Sub-menu: ثبت ورود امروز · ثبت خروج امروز · ویرای
 
 **Edit** («✏️ ویرایش ورود/خروج»). Pick a day (today or up to `max_manual_correction_age_days` back) → the day's registered times are shown → choose the check-in or check-out to change → new time → review (old ← new) → confirm. Same checks as a forgotten entry (not in the future, check-out after check-in, maximum shift, neighbouring days). The record gets source `USER_EDIT` (✏️), and the change, with the previous value, goes into `attendance_manual_corrections` and the audit log. A day with nothing registered points to «ثبت فراموشی».
 
-Every multi-step dialog (forgotten entry, edit, leave request) has «✖️ لغو», which ends the dialog, and «🔙 مرحله قبل», which goes back one step and keeps the earlier answers.
+Every multi-step dialog (forgotten entry, edit) has «✖️ لغو», which ends the dialog, and «🔙 مرحله قبل», which goes back one step and keeps the earlier answers.
 
 **Full-time and hourly staff.** By default a user is full-time and the organization rules apply (08:00–16:48, floating check-in until 09:30, unauthorized lateness, early departure, overtime and the monthly caps; see `floating_window` in CONFIGURATION.md). An admin with role management can switch a user to hourly on the user card («⏰ تبدیل به نیروی ساعتی», stored as `users.schedule_code = 'hourly'`). For hourly staff only check-in, check-out and worked time are recorded: no lateness, early departure, overtime, deficit or caps and days without a record are not absences. They get the same check-in and check-out reminders as everyone else.
 
@@ -36,39 +36,7 @@ Every multi-step dialog (forgotten entry, edit, leave request) has «✖️ لغ
 
 **Monthly report.** The timesheet's summary block for the current Jalali month: normal work, allowed lateness, unauthorized lateness and early departure each split into compensable / non-compensable, overtime, paid leave, then compensable total, overtime surplus, uncompensated and final work (see `floating_window` in CONFIGURATION.md). Its Excel button sends the organization's timesheet workbook (EXCEL_TEMPLATES.md).
 
-**Reminders.** At `check_in_reminder_time` on workdays, active employees with no check-in today get a reminder (people on approved daily leave are skipped). At `check_out_reminder_time`, people checked in without a check-out get one. Each is sent at most once per person per day.
-
-## Leave
-
-Sub-menu: درخواست مرخصی جدید · درخواست‌های من · وضعیت مرخصی‌ها · بازگشت
-
-```
-New: پرداخت (با حقوق / بی‌حقوق) → نوع (ساعتی / روزانه)
-  ساعتی:  date → start time → end time → reason (optional) → review → submit
-  روزانه: start date → end date (list starts at the start date) → reason → review (shows days) → submit
-  Dates: tap a day in the list or type 1405/07/26; times: hour → minute buttons or type 10:30
-  Every step: «🔙 مرحله قبل» goes back one step, «✖️ لغو» ends the request
-```
-
-Validation: start ≤ end; hourly leave is within one day and end > start; dates within `max_past_days`..`max_future_days`; at most `max_daily_leave_days`; no overlap with pending/approved requests unless `allow_overlapping_leave_requests`.
-
-### Approval state machine
-
-```
-                ┌──────── reject (reason) ────────┐
-submit → PENDING_ADMIN_1 ── approve ──→ PENDING_ADMIN_2 ── approve ──→ APPROVED
-                │                           │
-                └── reject (reason) ──→ REJECTED ←── reject (reason) ┘
-PENDING_* ── employee cancels ──→ CANCELLED
-```
-
-- Admin 1 (`ADMIN_1_SECRETARY`) is notified on submit. Admin 2 (`ADMIN_2_MANAGER`) is notified **only after** Admin 1 approves. `SUPER_ADMIN` may decide any step.
-- Each admin message shows the employee, type, dates or times, duration, reason and current step, with ✅ تأیید / ❌ رد.
-- Rejecting asks for a written reason (required by policy). The employee receives it, and the chain ends.
-- The employee is notified at each change: sent to manager, approved, rejected.
-- Duplicate clicks, clicks after another admin decided, and clicks on your own request are refused.
-- Each step is stored in `approval_steps` and each transition in `workflow_actions`, both with timestamps. Approvals and rejections are also written to `audit_logs`.
-- Admin panel: «📥 کارتابل مرخصی» lists pending requests for your role. «📤 مرخصی‌های ماه جاری / باز» exports to Excel.
+**Reminders.** At `check_in_reminder_time` on workdays, active employees with no check-in today get a reminder . At `check_out_reminder_time`, people checked in without a check-out get one. Each is sent at most once per person per day.
 
 ## Food
 
@@ -95,8 +63,7 @@ Reports: «📊 گزارش این هفته / هفته بعد» (per day: portion
 | حضور امروز / هفته جاری / ماه جاری / ماه قبل | `attendance.report_all` | Summary message + detailed Excel; a whole month also sends the timesheet workbook |
 | بازه‌ی دلخواه | `attendance.report_all` | Start/end Jalali calendar → report |
 | گزارش یک کارمند | `attendance.report_all` | Pick an employee → week/month/previous month/range |
-| کارتابل مرخصی | `leave.approve_step_1/2` | Pending requests with approval buttons |
-| مرخصی‌های ماه جاری / باز | `leave.report_all` | Excel export |
+| ثبت مرخصی | `leave.register` | Register a leave in the employee's Excel file (see below) |
 | کاربران و نقش‌ها | `users.view` (edit: `users.manage_roles`) | List → user card → toggle roles / activate. The user is notified |
 | فهرست کارکنان (ثبت‌نام) | `users.manage_roles` | Counts (registered / not yet) → download the list (also the empty template) → upload a new list → preview (new, changed, removed, linked, kept) → confirm |
 | وضعیت سیستم | `system.health` | Database/Redis status and server time |
@@ -104,7 +71,7 @@ Reports: «📊 گزارش این هفته / هفته بعد» (per day: portion
 ## Leave registered by an admin (written into the employee's Excel file)
 
 🛠 پنل مدیریت → **📝 ثبت مرخصی** (secretary, manager and super admin; permission `leave.register`,
-checked on every step). Works whether or not the employee leave module (`BOT_MODULES`) is on.
+checked on every step). This is the only way leave enters the system: employees do not request leave in the bot.
 
 1. Employee: active, full-time only (hourly staff are not listed and are refused).
 2. Type: the existing ones, با حقوق / بدون حقوق.

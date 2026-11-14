@@ -17,19 +17,38 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Tables of the removed employee leave feature. Their data stays in existing databases; autogenerate
+# must neither propose dropping them nor treat them as drift. Dropping them is a separate, deliberate step.
+RETIRED_TABLES = frozenset({"leave_requests", "leave_balances", "approval_steps", "workflow_actions"})
+
+
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    if type_ == "table" and name in RETIRED_TABLES:
+        return False
+    table = getattr(obj, "table", None)
+    return not (table is not None and table.name in RETIRED_TABLES)
+
 
 def database_url() -> str:
     return config.get_main_option("sqlalchemy.url") or get_settings().database_url
 
 
 def run_migrations_offline() -> None:
-    context.configure(url=database_url(), target_metadata=target_metadata, literal_binds=True, compare_type=True)
+    context.configure(
+        url=database_url(),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        compare_type=True,
+        include_object=include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    context.configure(
+        connection=connection, target_metadata=target_metadata, compare_type=True, include_object=include_object
+    )
     with context.begin_transaction():
         context.run_migrations()
 

@@ -27,6 +27,8 @@ async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_format)
     policy = get_policy()
+    if "leave" in {m.strip() for m in settings.bot_modules.split(",")}:
+        log.warning("BOT_MODULES lists «leave», which no longer exists; it is ignored (leave: admin panel → ثبت مرخصی)")
     if not settings.bot_token.get_secret_value():
         raise SystemExit("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
 

@@ -25,7 +25,6 @@ from app.presentation.bot.callbacks.data import (
     CorrCb,
     FoodCb,
     KeyCb,
-    LeaveCb,
     NavCb,
     UserAdminCb,
 )
@@ -411,90 +410,6 @@ async def test_edit_a_registered_check_in(bot: Harness, clock) -> None:
     assert "دوشنبه ۲۷ مهر ۱۴۰۵ ✏️" in week and "ورود ۰۸:۴۰" in week and "✏️ = ویرایش‌شده" in week
 
 
-async def test_leave_wizard_previous_step(bot: Harness, clock) -> None:
-    await bot.register(EMP, "مریم کریمی")
-    clock.set(tehran(2026, 10, 19, 8, 0))
-    await bot.press(EMP, LeaveCb(a="new").pack())
-    await bot.press(EMP, LeaveCb(a="pay", v="PAID").pack())
-    await bot.press(EMP, LeaveCb(a="back", v="pay").pack())
-    assert "نوع مرخصی" in bot.last_text(EMP)
-    await bot.press(EMP, LeaveCb(a="pay", v="UNPAID").pack())
-    await bot.press(EMP, LeaveCb(a="unit", v="HOURLY").pack())
-    await bot.press(EMP, CalCb(p="lv_d", a="d", v=date(2026, 10, 20).toordinal()).pack())
-    await bot.text(EMP, "10:00")
-    assert "ساعت پایان" in bot.last_text(EMP)
-    await bot.press(EMP, LeaveCb(a="back", v="stime").pack())
-    assert "ساعت شروع" in bot.last_text(EMP)
-    await bot.text(EMP, "24:10")
-    assert "۰۰ تا ۲۳" in bot.last_text(EMP)
-    await bot.text(EMP, "09:30")
-    await bot.text(EMP, "11:00")
-    assert "توضیح" in bot.last_text(EMP)
-    await bot.press(EMP, LeaveCb(a="skip_reason").pack())
-    await bot.press(EMP, LeaveCb(a="back", v="reason").pack())  # from the review back to the reason
-    assert "توضیح" in bot.last_text(EMP)
-    await bot.press(EMP, LeaveCb(a="skip_reason").pack())
-    assert "۰۹:۳۰" in bot.last_text(EMP) and "بی‌حقوق" in bot.last_text(EMP)
-
-
-async def test_hourly_leave_with_typed_date(bot: Harness, clock) -> None:
-    await bot.register(EMP, "مریم کریمی")
-    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
-    clock.set(tehran(2026, 10, 19, 8, 0))
-    await bot.press(EMP, LeaveCb(a="new").pack())
-    await bot.press(EMP, LeaveCb(a="pay", v="UNPAID").pack())
-    await bot.press(EMP, LeaveCb(a="unit", v="HOURLY").pack())
-    assert any(b.startswith("cal:lv_d:d:") for b in bot.buttons(EMP))
-    await bot.text(EMP, "1405/07/29")
-    assert "ساعت شروع" in bot.last_text(EMP)
-    await bot.text(EMP, "10:00")
-    await bot.text(EMP, "12:30")
-    await bot.press(EMP, LeaveCb(a="skip_reason").pack())
-    assert "۲:۳۰ ساعت" in bot.last_text(EMP)
-    await bot.press(EMP, LeaveCb(a="submit").pack())
-    assert "درخواست جدید برای بررسی" in bot.last_text(SEC)
-
-
-async def test_leave_request_two_step_approval_and_rejection(bot: Harness, clock) -> None:
-    await bot.register(EMP, "مریم کریمی")
-    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
-    await bot.register(MGR, "رضا مدیر", RoleCode.ADMIN_2_MANAGER)
-    clock.set(tehran(2026, 10, 19, 8, 0))
-
-    async def submit_daily(day: date) -> None:
-        await bot.press(EMP, LeaveCb(a="new").pack())
-        await bot.press(EMP, LeaveCb(a="pay", v="PAID").pack())
-        await bot.press(EMP, LeaveCb(a="unit", v="DAILY").pack())
-        await bot.press(EMP, CalCb(p="lv_s", a="d", v=day.toordinal()).pack())
-        await bot.press(EMP, CalCb(p="lv_e", a="d", v=day.toordinal()).pack())
-        await bot.text(EMP, "کار شخصی")
-        assert "مرور درخواست مرخصی" in bot.last_text(EMP)
-        await bot.press(EMP, LeaveCb(a="submit").pack())
-
-    await submit_daily(date(2026, 10, 21))
-    assert "ثبت شد" in bot.texts(EMP)[-1]
-    # The secretary got the request with approve/reject buttons; the manager got nothing yet.
-    assert "درخواست جدید برای بررسی" in bot.last_text(SEC)
-    assert not any("درخواست جدید" in t for t in bot.texts(MGR))
-    approve = next(b for b in bot.buttons(SEC) if b.endswith(":y"))
-    await bot.press(SEC, approve)
-    assert "توسط منشی تأیید شد" in bot.last_text(EMP)
-    assert "درخواست جدید برای بررسی" in bot.last_text(MGR)
-    await bot.press(SEC, approve)  # stale second click
-    assert any("قبلاً" in a for a in bot.alerts())
-
-    reject = next(b for b in bot.buttons(MGR) if b.endswith(":n"))
-    await bot.press(MGR, reject)
-    assert "دلیل رد" in bot.last_text(MGR)
-    await bot.text(MGR, "در این تاریخ جلسه‌ی مهم داریم")
-    assert "رد شد" in bot.last_text(EMP) and "جلسه" in bot.last_text(EMP)
-
-    # Overlap with a rejected request is fine; the history shows both.
-    await submit_daily(date(2026, 10, 21))
-    await bot.press(EMP, LeaveCb(a="mine").pack())
-    assert "رد شده" in bot.last_text(EMP) and "در انتظار بررسی منشی" in bot.last_text(EMP)
-
-
 async def test_food_order_and_admin_reports(bot: Harness, clock) -> None:
     await bot.register(EMP, "مریم کریمی")
     await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
@@ -640,11 +555,6 @@ async def test_soroush_row_limit_applies_to_every_keyboard(bot: Harness, clock) 
         await bot.press(EMP, CalCb(p="corr", a="d", v=date(2026, 10, 18).toordinal()).pack())
         await bot.press(EMP, "cor:kind:in")
         await bot.text(EMP, "08:15")
-        await bot.press(EMP, LeaveCb(a="new").pack())
-        await bot.press(EMP, LeaveCb(a="pay", v="PAID").pack())
-        await bot.press(EMP, LeaveCb(a="unit", v="HOURLY").pack())
-        await bot.press(EMP, CalCb(p="lv_d", a="d", v=date(2026, 10, 20).toordinal()).pack())  # hour picker
-        assert "tm:lv_s:h:10:0" in bot.buttons(EMP)
         assert bot.recorder.widest_row == 2
     finally:
         set_max_buttons_per_row(8)
@@ -670,22 +580,16 @@ def _reply_keyboard(harness: Harness, chat_id: int) -> list[str]:
 
 
 async def test_attendance_only_bot(attendance_only, session_factory, policy, clock) -> None:
-    from app.presentation.bot.modules import BTN_ADMIN, BTN_ATTENDANCE, BTN_FOOD, BTN_LEAVE
+    from app.presentation.bot.modules import BTN_ADMIN, BTN_ATTENDANCE, BTN_FOOD
 
     bot = Harness(session_factory, policy, clock)
     await bot.register(EMP, "مریم کریمی")
     await bot.register(SEC, "سارا منشی", RoleCode.SUPER_ADMIN)
     await bot.text(EMP, "/start")
     menu = _reply_keyboard(bot, EMP)
-    assert BTN_ATTENDANCE in menu and BTN_LEAVE not in menu and BTN_FOOD not in menu
-    assert "مرخصی" not in bot.last_text(EMP)
+    assert BTN_ATTENDANCE in menu and BTN_FOOD not in menu
     await bot.text(EMP, "/help")
-    assert "مرخصی" not in bot.last_text(EMP) and "سفارش غذا" not in bot.last_text(EMP)
-    # The sections are switched off, not just hidden: their buttons and texts do nothing.
-    await bot.text(EMP, BTN_LEAVE)
-    assert "منوی پایین" in bot.last_text(EMP)
-    await bot.press(EMP, LeaveCb(a="new").pack())
-    assert any("منقضی" in a for a in bot.alerts())
+    assert "سفارش غذا" not in bot.last_text(EMP)
     # Attendance works as usual; the admin panel has no leave buttons.
     clock.set(tehran(2026, 10, 19, 9, 0))
     await bot.press(EMP, AttCb(a="in").pack())
@@ -696,6 +600,35 @@ async def test_attendance_only_bot(attendance_only, session_factory, policy, clo
     await bot.text(SEC, BTN_ADMIN)
     assert not any(b.startswith("adm:lv_") for b in bot.buttons(SEC))
     assert AdminCb(a="att", v="month").pack() in bot.buttons(SEC)
+
+
+async def test_the_employee_leave_feature_is_gone(bot: Harness, clock) -> None:
+    """Leave is registered only by an admin (ثبت مرخصی); employees have no leave button or requests."""
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    await bot.text(EMP, "/start")
+    menu = _reply_keyboard(bot, EMP)
+    assert not any("مرخصی" in label for label in menu)
+    await bot.text(EMP, "/help")
+    assert "مرخصی" not in bot.last_text(EMP)
+    await bot.text(EMP, "📝 مرخصی")  # the old menu text: nothing behind it any more
+    assert "منوی پایین" in bot.last_text(EMP)
+    # Buttons from old leave messages still in people's chats are answered as expired, not as an error
+    for old in ("lv:new:", "lv:mine:", "ap:lv:" + "0" * 32 + ":1:y"):
+        await bot.press(EMP, old)
+        assert any("منقضی" in a for a in bot.alerts()), old
+    await bot.text(SEC, "🛠 پنل مدیریت")
+    buttons = bot.buttons(SEC)
+    assert not any(b.startswith(("adm:lv_inbox", "adm:lv_xls")) for b in buttons)  # no inbox or exports
+    assert AdminCb(a="lr", v="0").pack() in buttons  # «📝 ثبت مرخصی» stays
+
+
+def test_leave_in_bot_modules_is_accepted_and_ignored(monkeypatch) -> None:
+    """Older .env files still say BOT_MODULES=attendance,leave,food: the bot starts, without a leave section."""
+    from app.core.config.settings import Settings
+
+    monkeypatch.setenv("BOT_MODULES", "attendance,leave,food")
+    assert Settings().enabled_modules == frozenset({"attendance", "food"})
 
 
 def test_unknown_module_is_rejected(monkeypatch) -> None:

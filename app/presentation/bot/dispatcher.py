@@ -10,13 +10,11 @@ from app.core.config.policy import Policy
 from app.core.utils.clock import TimeService
 from app.presentation.bot.handlers import (
     admin,
-    approvals,
     attendance,
     common,
     fallback,
     food,
     food_admin,
-    leave,
     start,
 )
 from app.presentation.bot.middlewares.context import ContextMiddleware, ErrorMiddleware, UserLockMiddleware
@@ -26,9 +24,7 @@ from app.presentation.bot.middlewares.context import ContextMiddleware, ErrorMid
 ROUTERS = [
     start.router,
     common.router,
-    approvals.router,
     attendance.router,
-    leave.router,
     food_admin.router,
     food.router,
     admin.router,
@@ -36,8 +32,6 @@ ROUTERS = [
 ]
 # Routers that belong to an optional section (BOT_MODULES); the rest are always included.
 MODULE_OF_ROUTER = {
-    approvals.router: "leave",
-    leave.router: "leave",
     food_admin.router: "food",
     food.router: "food",
 }

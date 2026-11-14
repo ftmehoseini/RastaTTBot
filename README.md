@@ -5,7 +5,7 @@ An administrative automation bot for an organization in Iran, with Persian (Jala
 | Module | What employees do | What admins do |
 |---|---|---|
 | ⏱ Attendance | Check in and check out with confirmation, enter forgotten entries, see today's status and the weekly report (text or Excel) | Reports for today, the week, the month, any date range or one employee, as a summary plus a detailed Excel file |
-| 📝 Leave | Request paid or unpaid leave, by the hour or by the day, and follow its status | Two-step approval (secretary, then manager) with a required rejection reason, an inbox, and Excel export |
+| 📝 Leave | — (employees do not request leave in the bot) | «📝 ثبت مرخصی»: register a daily or hourly leave for a full-time employee, written straight into their Excel file |
 | 🍽 Food | View the weekly menu, order a meal, order for guests, see a weekly invoice with payment details | Upload the menu from Excel (with preview and versioning), notify everyone, daily summaries, order and invoice Excel files |
 
 The bot also has central role-based access control (RBAC) with an audit log, reminders at 10:00 and 20:00 that never repeat, and an importer for data from the old RastaTT SQLite bot.
@@ -94,7 +94,7 @@ TEST_DATABASE_URL=postgresql+asyncpg://u:p@localhost:5432/rasta_bot_test .venv/b
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
-There are 93 tests: Jalali boundaries, calculation formulas, duplicate prevention, corrections, reminder selection and idempotency, leave state machine, menu Excel validation, food cutoff, guests and invoices, RBAC, and end-to-end bot dialogs through the real aiogram dispatcher.
+There are 186 tests: Jalali boundaries, calculation formulas, duplicate prevention, corrections, reminder selection and idempotency, the Excel workbooks and timesheet (recalculated with LibreOffice), leave registration rules, menu Excel validation, food cutoff, guests and invoices, RBAC, and end-to-end bot dialogs through the real aiogram dispatcher.
 
 ## Creating the first super admin
 
