@@ -301,7 +301,8 @@ async def test_month_report_follows_the_excel_summary(services, make_user, clock
     assert (m.floating_late, m.late, m.early, m.overtime, m.paid_leave) == (30 + 90, 30, 48, 72, 120)
     assert m.compensable == 120 + 30 + 48
     assert m.uncompensated == 198 - 72
-    assert m.final_work == round(m.normal + 72 + 120 - 126 * 1.6)
+    # The organization's current formula (آبان): normal + MIN(overtime, compensable) + leave, no factors
+    assert m.final_work == m.normal + min(72, m.compensable) + 120
     row = next(r for r in month.rows if r.work_date == date(2026, 10, 18))
     assert row.paid_leave_minutes == 120 and "مرخصی ساعتی با حقوق" in row.leave_note
 

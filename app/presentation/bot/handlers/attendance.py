@@ -1,5 +1,6 @@
 """Attendance module UI. Every rule lives in AttendanceService; this file only drives the dialog."""
 
+import asyncio
 from datetime import UTC, date, datetime, time
 
 from aiogram import F, Router
@@ -20,7 +21,7 @@ from app.core.utils.text import to_persian_digits
 from app.domain.attendance.models import CorrectionStatus, CorrectionType
 from app.domain.users.models import User
 from app.infrastructure.excel.recalc import RecalculationError
-from app.infrastructure.excel.reports import build_attendance_workbook, report_filename
+from app.infrastructure.excel.reports import report_filename
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
 from app.infrastructure.excel.workbook import WorkbookError
 from app.infrastructure.tasks import dispatch
@@ -242,13 +243,10 @@ async def my_excel(query: CallbackQuery, callback_data: AttCb, services: Service
     else:
         report = await services.attendance.my_week(user)
     await query.answer("در حال آماده‌سازی فایل…")
-    if callback_data.a == "month_xls" and not report.hourly:
-        rules, holidays = services.attendance.sheet_rules, services.attendance.holidays
-        content = build_timesheet_workbook([report], rules, holidays)
-        filename = report_filename("timesheet_me", report.start, report.end)
-    else:
-        content = build_attendance_workbook([report])
-        filename = report_filename("attendance_me", report.start, report.end)
+    # Every attendance Excel file has the organization's timesheet structure (week or month).
+    rules, holidays = services.attendance.sheet_rules, services.attendance.holidays
+    content = await asyncio.to_thread(build_timesheet_workbook, [report], rules, holidays)
+    filename = report_filename("timesheet_me", report.start, report.end)
     await send_file(query_message(query), content, filename)
 
 

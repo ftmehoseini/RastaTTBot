@@ -1,19 +1,28 @@
-"""The organization's monthly timesheet workbook, with its own formulas.
+"""The organization's timesheet: every attendance Excel file the bot sends has this one structure.
 
-One sheet per employee and month, laid out like the organization's Excel file: a table of the
-month's days (columns A–P) whose columns J–O are the workbook's formulas, and the summary block
-under it. Only the inputs are written by the bot (weekday, date, check-in, check-out, paid leave,
-notes); Excel calculates everything else when the file is opened, with exactly the formulas below.
-`app/domain/attendance/timesheet.py` is the same arithmetic in Python for the bot's own reports.
+The structure is the organization's own «آبان» sheet, kept as a template in
+`templates/timesheet_template.xlsx` (layout, formulas, totals block, styles and the notes on the
+totals; no personal data). For each employee the template sheet is recreated for the report's days:
+one row per day (weekday, month, day, the inputs), the template's formulas in the calculated columns
+(their table name renamed), and the totals block moved under the last day. Only the inputs are
+written by the bot; Excel (or LibreOffice) calculates everything when the file is opened.
+
+Columns are found by their header text, so a new template with the same headers needs no code change.
+The two leave columns («مرخصی وسط روز», «مرخصي اول و آخر») are left empty until their rules are defined;
+an approved leave is described in «توضیحات».
 """
 
 import io
 import re
 from collections.abc import Mapping, Sequence
+from copy import copy
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl import Workbook, load_workbook
+from openpyxl.comments import Comment
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableColumn, TableFormula, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -22,60 +31,73 @@ from app.core.utils.jalali import iter_days, month_name, to_jalali, weekday_name
 from app.domain.attendance.models import DayStatus
 from app.domain.attendance.timesheet import SheetRules
 
-# Header texts are referenced by the formulas, so they must stay exactly like this (note the double
-# space in «مرخصی  با حقوق», as in the organization's file).
-COLUMNS = [
-    ("روز", 12),
-    ("ماه", 10),
-    ("تاریخ", 7),
-    ("ساعت ورود", 11),
-    ("شروع شناوری", 12),
-    ("پایان شناوری", 12),
-    ("ساعت مجاز خروج", 14),
-    ("ساعت خروج", 11),
-    ("مرخصی  با حقوق", 14),
-    ("ساعت مفید", 11),
-    ("کارکرد عادی روزانه", 17),
-    ("تاخیر مجاز", 11),
-    ("تاخیر غیر مجاز", 13),
-    ("تعجیل", 9),
-    ("اضافه کار روزانه", 16),
-    ("توضیحات", 40),
-]
+TEMPLATE_PATH = Path(__file__).parent / "templates" / "timesheet_template.xlsx"
 
-# The workbook's calculated columns, verbatim; {t} is the table name.
-FORMULAS = {
-    "ساعت مفید": "{t}[[#This Row],[ساعت خروج]]-{t}[[#This Row],[ساعت ورود]]",
-    "کارکرد عادی روزانه": (
-        "IF(AND({t}[[#This Row],[ساعت ورود]]>0, {t}[[#This Row],[ساعت ورود]]>={t}[[#This Row],[شروع شناوری]]),"
-        " IF({t}[[#This Row],[ساعت خروج]]<={t}[[#This Row],[ساعت مجاز خروج]],"
-        " MAX({t}[[#This Row],[ساعت خروج]]-{t}[[#This Row],[ساعت ورود]], 0),"
-        " {t}[[#This Row],[ساعت مجاز خروج]]-{t}[[#This Row],[ساعت ورود]]),"
-        " IF({t}[[#This Row],[ساعت خروج]]<={t}[[#This Row],[ساعت مجاز خروج]],"
-        " MAX({t}[[#This Row],[ساعت خروج]]-{t}[[#This Row],[شروع شناوری]], 0), "
-        " {t}[[#This Row],[ساعت مجاز خروج]]-{t}[[#This Row],[شروع شناوری]]))"
-    ),
-    "تاخیر مجاز": (
-        "IF(AND({t}[[#This Row],[ساعت ورود]]>={t}[[#This Row],[شروع شناوری]],"
-        "+{t}[[#This Row],[ساعت ورود]]<={t}[[#This Row],[پایان شناوری]]),"
-        "{t}[[#This Row],[ساعت ورود]]-{t}[[#This Row],[شروع شناوری]],"
-        "IF({t}[[#This Row],[ساعت ورود]]>{t}[[#This Row],[پایان شناوری]],"
-        " {t}[[#This Row],[پایان شناوری]]-{t}[[#This Row],[شروع شناوری]], 0))"
-    ),
-    "تاخیر غیر مجاز": (
-        "IF({t}[[#This Row],[ساعت ورود]]>{t}[[#This Row],[پایان شناوری]],"
-        " {t}[[#This Row],[ساعت ورود]]-{t}[[#This Row],[پایان شناوری]], 0)"
-    ),
-    "تعجیل": (
-        "IF({t}[[#This Row],[ساعت خروج]]>0, MAX({t}[[#This Row],[ساعت مجاز خروج]]-{t}[[#This Row],[ساعت خروج]], 0), 0)"
-    ),
-    "اضافه کار روزانه": "MAX({t}[[#This Row],[ساعت مفید]]-{t}[[#This Row],[کارکرد عادی روزانه]], 0)",
-}
+WEEKDAY = "روز"
+MONTH = "ماه"
+DAY = "تاریخ"
+CHECK_IN = "ساعت ورود"
+FLOAT_START = "شروع شناوری"
+FLOAT_END = "پایان شناوری"
+ALLOWED_EXIT = "ساعت مجاز خروج"
+CHECK_OUT = "ساعت خروج"
+NOTES = "توضیحات"
+REQUIRED = (WEEKDAY, MONTH, DAY, CHECK_IN, FLOAT_START, FLOAT_END, ALLOWED_EXIT, CHECK_OUT)
 
-TIME_FORMAT = "h:mm"
-TOTAL_FORMAT = "[h]:mm:ss"
-DAY_FORMAT = "[$-3000401]0"  # day number in Persian digits, as in the organization's file
-TABLE_STYLE = "TableStyleMedium6"
+# A1-style reference (B32, $L$34, …) in a formula; table names and structured references don't match.
+_CELL_REF = re.compile(r"(?<![A-Za-z0-9_؀-ۿ\[])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(])")
+
+
+def _key(text: object) -> str:
+    return " ".join(str(text).replace("ي", "ی").replace("ك", "ک").split())
+
+
+@dataclass(frozen=True)
+class _Template:
+    sheet: Worksheet
+    table: Table
+    columns: dict[str, int]  # normalized header -> column
+    last_col: int
+    day_row: int  # the template's first day row (day n copies template row day_row + n - 1)
+    last_day_row: int
+    totals: list[int]  # rows of the totals block under the day rows
+
+
+def _template(workbook: Workbook) -> _Template:
+    sheet = workbook.worksheets[0]
+    if not sheet.tables:
+        raise ValueError("timesheet template: the sheet must contain an Excel table")
+    table = next(iter(sheet.tables.values()))
+    match = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", table.ref)
+    assert match is not None, table.ref
+    header_row, last_day_row = int(match.group(2)), int(match.group(4))
+    columns = {_key(c.value): c.column for c in sheet[header_row] if c.value}
+    missing = [h for h in REQUIRED if h not in columns]
+    if missing:
+        raise ValueError(f"timesheet template: missing columns {missing}")
+    totals = [r for r in range(last_day_row + 1, sheet.max_row + 1) if any(c.value is not None for c in sheet[r])]
+    last_col = max(columns.values())
+    return _Template(sheet, table, columns, last_col, header_row + 1, last_day_row, totals)
+
+
+def _shift_rows(formula: str, offset: int) -> str:
+    """Move A1 references by `offset` rows (the totals block moves with the number of days)."""
+
+    def shift(m: re.Match[str]) -> str:
+        if m.group(3):  # $-anchored row stays
+            return m.group(0)
+        return f"{m.group(1)}{m.group(2)}{m.group(3)}{int(m.group(4)) + offset}"
+
+    return _CELL_REF.sub(shift, formula)
+
+
+def _copy_cell(source, target, value=None) -> None:
+    target._style = copy(source._style)
+    target.value = source.value if value is None else value
+    if source.comment is not None:
+        comment = Comment(source.comment.text, source.comment.author)
+        comment.width, comment.height = source.comment.width, source.comment.height
+        target.comment = comment
 
 
 def _sheet_title(name: str, used: set[str]) -> str:
@@ -122,143 +144,146 @@ def _notes(row: DayRow | None, day: date, holidays: Mapping[date, str]) -> str:
     return " | ".join(notes)
 
 
-def _write_summary(sheet: Worksheet, table: str, first: int, rules: SheetRules) -> None:
-    """The summary block under the table, with the workbook's formulas."""
-    r1, r2, r3, r4 = first, first + 1, first + 2, first + 3
-    final = f"=B{r1}+MIN(K{r1}, P{r1})+B{r3}"
-    if rules.surplus_factor:
-        final += f"+P{r2}*{rules.surplus_factor:g}"
-    if rules.penalty_factor:
-        final += f"-P{r3}*{rules.penalty_factor:g}"
-    cells = {
-        f"A{r1}": "مجموع کارکرد عادی:",
-        f"B{r1}": f"=SUM({table}[کارکرد عادی روزانه])",
-        f"I{r1}": "مجموع اضافه کار:",
-        f"K{r1}": f"= SUM({table}[اضافه کار روزانه])",
-        f"O{r1}": "مقدار تاخیر و تعجیل قابل جبران:",
-        f"P{r1}": f"=K{r2}+MIN(K{r3}, L{r3})+MIN(K{r4}, L{r4})",
-        f"A{r2}": "مرخصی مجاز:",
-        f"I{r2}": "مجموع تاخیر مجاز:",
-        f"K{r2}": f"=SUM({table}[تاخیر مجاز])",
-        f"O{r2}": "مقدار اضافه کار مازاد بر نیاز:",
-        f"P{r2}": f"=MAX(K{r1}-P{r1},0)",
-        f"A{r3}": "مرخصی مصرفی:",
-        f"B{r3}": f"=SUM({table}[مرخصی  با حقوق])",
-        f"I{r3}": "مجموع تاخیر غیرمجاز:",
-        f"K{r3}": f"=SUM({table}[تاخیر غیر مجاز])",
-        f"L{r3}": _clock(rules.late_cap),
-        f"M{r3}": f"=MAX(K{r3}-L{r3},0)",
-        f"O{r3}": "میزان تاخیر و تعجیل جبران نشده:",
-        f"P{r3}": f"=MAX(P{r1}-K{r1},0)+MAX(K{r3}-L{r3},0)+MAX(K{r4}-L{r4},0)",
-        f"A{r4}": "باقیمانده مرخصی:",
-        f"B{r4}": f"=B{r2}-B{r3}",
-        f"I{r4}": "مجموع تعجیل:",
-        f"K{r4}": f"=SUM({table}[تعجیل])",
-        f"L{r4}": _clock(rules.early_cap),
-        f"M{r4}": f"=MAX(K{r4}-L{r4},0)",
-        f"O{r4}": "کارکرد نهایی:",
-        f"P{r4}": final,
+def _inputs(row: DayRow | None, day: date, hourly: bool, rules: SheetRules) -> dict[str, object]:
+    """The input cells of one day, by header. Calculated columns are left to the template's formulas."""
+    values: dict[str, object] = {
+        WEEKDAY: weekday_name(day),
+        MONTH: month_name(to_jalali(day).month),
+        DAY: to_jalali(day).day,
+        FLOAT_START: _clock(rules.floating_start),
+        FLOAT_END: _clock(rules.floating_end),
+        ALLOWED_EXIT: _clock(rules.allowed_exit),
     }
-    for ref, value in cells.items():
-        cell = sheet[ref]
-        cell.value = value
-        if isinstance(value, str) and not value.startswith("="):
-            cell.font = Font(bold=True)
-        elif ref[0] == "L":
-            cell.number_format = TIME_FORMAT
-        else:
-            cell.number_format = TOTAL_FORMAT
-    sheet[f"B{r2}"].number_format = TOTAL_FORMAT  # مرخصی مجاز: filled in by the admin
+    c = row.calculation if row else None
+    # A check-out without a check-in is left out: the formulas would read it as presence from 0:00.
+    if c is not None and c.check_in is not None:
+        check_in = _minutes_of(day, c.check_in)
+        values[CHECK_IN] = _clock(check_in)
+        check_out = _minutes_of(day, c.check_out) if c.check_out is not None else None
+        if check_out is not None:
+            values[CHECK_OUT] = _clock(check_out)
+        if hourly:
+            # No official hours: start = end of window = check-in and allowed exit = check-out, so the
+            # formulas give the presence as normal work, with no lateness or early departure.
+            values[FLOAT_START] = values[FLOAT_END] = _clock(check_in)
+            if check_out is not None:
+                values[ALLOWED_EXIT] = _clock(check_out)
+        elif row is not None and not row.is_workday:
+            # Day off: E = F = G = the check-in makes the same formulas count all presence as overtime.
+            for header in (FLOAT_START, FLOAT_END, ALLOWED_EXIT):
+                values[header] = _clock(check_in)
+    return values
 
 
 def add_timesheet_sheet(
     workbook: Workbook,
+    template: _Template,
     report: EmployeeReport,
     rules: SheetRules,
     holidays: Mapping[date, str],
     table_name: str,
     title: str,
 ) -> Worksheet:
+    tpl = template.sheet
+    old_name = template.table.displayName
     sheet = workbook.create_sheet(title)
-    sheet.sheet_view.rightToLeft = True
-    sheet.freeze_panes = "D2"
-    for col, (header, width) in enumerate(COLUMNS, start=1):
-        cell = sheet.cell(1, col, header)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        sheet.column_dimensions[cell.column_letter].width = width
+    sheet.sheet_view.rightToLeft = tpl.sheet_view.rightToLeft
+    sheet.sheet_view.zoomScale = tpl.sheet_view.zoomScale
+    sheet.freeze_panes = tpl.freeze_panes
+    for key, dim in tpl.column_dimensions.items():
+        sheet.column_dimensions[key].width = dim.width
+        sheet.column_dimensions[key].hidden = dim.hidden
+
+    header_row = template.day_row - 1
+    for col in range(1, template.last_col + 1):
+        _copy_cell(tpl.cell(header_row, col), sheet.cell(header_row, col))
+    sheet.row_dimensions[header_row].height = tpl.row_dimensions[header_row].height
+
     rows = {r.work_date: r for r in report.rows}
     days = iter_days(report.start, report.end)
-    month = month_name(to_jalali(report.start).month)
-    for index, day in enumerate(days, start=2):
+    for index, day in enumerate(days):
+        r = template.day_row + index
         row = rows.get(day)
-        c = row.calculation if row else None
-        values: dict[str, object] = {
-            "روز": weekday_name(day),
-            "ماه": month,
-            "تاریخ": to_jalali(day).day,
-            "شروع شناوری": _clock(rules.floating_start),
-            "پایان شناوری": _clock(rules.floating_end),
-            "ساعت مجاز خروج": _clock(rules.allowed_exit),
-            "توضیحات": _notes(row, day, holidays) or None,
-        }
-        # A check-out without a check-in is left out: the formulas would read it as presence from 0:00.
-        if c is not None and c.check_in is not None:
-            check_in = _minutes_of(day, c.check_in)
-            values["ساعت ورود"] = _clock(check_in)
-            if c.check_out is not None:
-                values["ساعت خروج"] = _clock(_minutes_of(day, c.check_out))
-            if not row.is_workday:
-                # Day off: E = F = G = the check-in makes the same formulas count all presence as
-                # overtime (no normal work, lateness or early departure), as the bot does.
-                for header in ("شروع شناوری", "پایان شناوری", "ساعت مجاز خروج"):
-                    values[header] = _clock(check_in)
-        if row is not None and row.paid_leave_minutes:
-            values["مرخصی  با حقوق"] = _clock(row.paid_leave_minutes)
-        for col, (header, _) in enumerate(COLUMNS, start=1):
-            cell = sheet.cell(index, col)
-            if header in FORMULAS:
-                cell.value = "=" + FORMULAS[header].format(t=table_name)
+        values = _inputs(row, day, report.hourly, rules)
+        values[NOTES] = _notes(row, day, holidays) or None
+        by_column = {template.columns[h]: v for h, v in values.items() if h in template.columns}
+        # Day n copies the template's row n (its exact styles); a longer month repeats the last row.
+        source_row = min(template.day_row + index, template.last_day_row)
+        for col in range(1, template.last_col + 1):
+            source = tpl.cell(source_row, col)
+            target = sheet.cell(r, col)
+            target._style = copy(source._style)
+            if isinstance(source.value, str) and source.value.startswith("="):
+                target.value = source.value.replace(old_name, table_name)
             else:
-                cell.value = values.get(header)
-            if header == "تاریخ":
-                cell.number_format = DAY_FORMAT
-            elif 4 <= col <= 15:
-                cell.number_format = TIME_FORMAT
-    last = len(days) + 1
-    table = Table(displayName=table_name, ref=f"A1:P{last}")
-    table.tableStyleInfo = TableStyleInfo(name=TABLE_STYLE, showRowStripes=True)
+                target.value = by_column.get(col)
+        sheet.row_dimensions[r].height = tpl.row_dimensions[source_row].height
+    last = template.day_row + len(days) - 1
+
+    offset = last - template.last_day_row
+    for r in template.totals:
+        for source in tpl[r]:
+            if source.value is None and not source.has_style and source.comment is None:
+                continue
+            target = sheet.cell(r + offset, source.column)
+            value = source.value
+            if isinstance(value, str) and value.startswith("="):
+                value = _shift_rows(value.replace(old_name, table_name), offset)
+            _copy_cell(source, target, value)
+        if tpl.row_dimensions[r].height:
+            sheet.row_dimensions[r + offset].height = tpl.row_dimensions[r].height
+
+    table = Table(displayName=table_name, ref=f"A{header_row}:{get_column_letter(template.last_col)}{last}")
+    style = template.table.tableStyleInfo
+    table.tableStyleInfo = TableStyleInfo(
+        name=style.name,
+        showFirstColumn=style.showFirstColumn,
+        showLastColumn=style.showLastColumn,
+        showRowStripes=style.showRowStripes,
+        showColumnStripes=style.showColumnStripes,
+    )
     # Declaring the calculated columns lets Excel fill the formulas into rows added by hand.
     table.tableColumns = [
         TableColumn(
             id=i,
-            name=header,
+            name=column.name,
             calculatedColumnFormula=(
-                TableFormula(attr_text=FORMULAS[header].format(t=table_name)) if header in FORMULAS else None
+                TableFormula(attr_text=column.calculatedColumnFormula.attr_text.replace(old_name, table_name))
+                if column.calculatedColumnFormula is not None
+                else None
             ),
         )
-        for i, (header, _) in enumerate(COLUMNS, start=1)
+        for i, column in enumerate(template.table.tableColumns, start=1)
     ]
     sheet.add_table(table)
-    _write_summary(sheet, table_name, last + 1, rules)
     return sheet
 
 
 def build_timesheet_workbook(
-    reports: Sequence[EmployeeReport], rules: SheetRules, holidays: Mapping[date, str]
+    reports: Sequence[EmployeeReport],
+    rules: SheetRules,
+    holidays: Mapping[date, str],
+    template_path: Path = TEMPLATE_PATH,
 ) -> bytes:
-    """One timesheet sheet per (full-time) employee; each report must cover one Jalali month."""
-    workbook = Workbook()
-    default = workbook.active
+    """One sheet per employee in the organization's structure, for each report's days."""
+    workbook = load_workbook(template_path)
+    template = _template(workbook)
     used: set[str] = set()
-    month = month_name(to_jalali(reports[0].start).month) if reports else "ماه"
-    for i, report in enumerate((r for r in reports if not r.hourly), start=1):
-        add_timesheet_sheet(workbook, report, rules, holidays, f"{month}_{i}", _sheet_title(report.full_name, used))
-    if len(workbook.worksheets) > 1:
-        workbook.remove(default)
+    for i, report in enumerate(reports, start=1):
+        month = month_name(to_jalali(report.start).month)
+        add_timesheet_sheet(
+            workbook, template, report, rules, holidays, f"{month}_{i}", _sheet_title(report.full_name, used)
+        )
+    if reports:
+        workbook.remove(template.sheet)
     else:
-        default.title = "بدون داده"
-        default.sheet_view.rightToLeft = True
-        default["A1"] = "کارمند تمام‌وقتی در این گزارش نیست."
+        for row in template.sheet.iter_rows():
+            for cell in row:
+                cell.value = None
+                cell.comment = None
+        template.sheet.tables.clear()
+        template.sheet.title = "بدون داده"
+        template.sheet["A1"] = "کارمندی در این گزارش نیست."
     workbook.calculation.fullCalcOnLoad = True  # Excel and LibreOffice recalculate on open
     buffer = io.BytesIO()
     workbook.save(buffer)

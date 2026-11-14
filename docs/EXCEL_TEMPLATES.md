@@ -74,20 +74,39 @@ Example:
 
 Uploading a second file for the same week creates version 2. Orders keep the name and price they were placed with. See WORKFLOWS.md for the replacement rules.
 
-## Monthly timesheet (`timesheet_<from>-<to>.xlsx`, `timesheet_me_…`)
+## Attendance Excel files: the organization's timesheet (`timesheet_<from>-<to>.xlsx`, `timesheet_me_…`)
 
-The organization's own timesheet layout, sent for whole-month reports (admin: ماه جاری / ماه قبل / one employee for a month; employee: گزارش ماهانه من → Excel). One sheet per full-time employee (hourly staff are in the detailed attendance report only), right-to-left, as an Excel table:
+**Every** attendance Excel file the bot sends has one structure: the organization's «آبان» sheet, kept as
+`app/infrastructure/excel/templates/timesheet_template.xlsx` (layout, formulas, totals block, styles,
+column widths and the notes on the totals; no personal data). That includes the employee's weekly and
+monthly Excel, and the admin's reports for today, this week, this/last month, a custom range or one
+employee. One sheet per employee (hourly staff included), right-to-left, as an Excel table.
+
+For each report the template is recreated for the report's days: one row per day (a 29-, 30- or 31-day
+month, a week, any range), each day row with the styles of the matching template row, the template's
+formulas (with the table renamed), and the totals block moved right under the last day with its
+references adjusted.
 
 | Column | Written by | Content |
 |---|---|---|
 | A روز, B ماه, C تاریخ | bot | Weekday, Jalali month, day |
 | D ساعت ورود, H ساعت خروج | bot | Times (a check-out after midnight is more than 24 h; a check-out without a check-in is left out and noted) |
-| E شروع شناوری, F پایان شناوری, G ساعت مجاز خروج | bot | 8:00, 9:30, 16:48 from the policy; on a day off with presence all three are the check-in time, so the formulas count everything as overtime |
-| I مرخصی  با حقوق | bot | Approved paid leave: an hourly leave's length, 8:48 for a day of daily leave |
-| J ساعت مفید … O اضافه کار روزانه | **formulas** | The workbook's formulas, character for character |
-| P توضیحات | bot | Holiday, leave, missing time, ثبت فراموشی / ثبت دستی / ویرایش‌شده |
+| E شروع شناوری, F پایان شناوری, G ساعت مجاز خروج | bot | 8:00, 9:30, 16:48 from the policy. Day off with presence: E = F = G = check-in (all overtime). Hourly staff: E = F = check-in and G = check-out (no lateness or early departure) |
+| I مرخصی وسط روز, J مرخصي اول و آخر | — | **Empty for now**: the rules for filling them will be defined. An approved leave is described in Q |
+| K ساعت مفید … P اضافه کار روزانه | **formulas** | The template's formulas, character for character |
+| Q توضیحات | bot | Holiday, leave, missing time, ثبت فراموشی / ثبت دستی / ویرایش‌شده |
 
-Under the table, the summary block with the workbook's formulas: مجموع کارکرد عادی, مجموع اضافه کار, مقدار تاخیر و تعجیل قابل جبران, مجموع تاخیر مجاز, اضافه کار مازاد, مرخصی مصرفی, مجموع تاخیر غیرمجاز (cap 7:00 next to it), جبران نشده, مجموع تعجیل (cap 3:00), کارکرد نهایی (with the 0.8 / 1.6 factors from the policy). «مرخصی مجاز» is left empty for the admin to fill in. The file has no stored results: Excel (or LibreOffice) calculates on open. The test suite recalculates a generated file with LibreOffice and checks the results against the bot's own numbers.
+Totals block (the template's own formulas): مجموع کارکرد عادی, مجموع اضافه کار, مقدار تاخیر و تعجیل قابل
+جبران, مرخصی مجاز (left empty for the admin), مجموع تاخیر مجاز, مقدار اضافه کار مازاد بر نیاز, مرخصی
+مصرفی (= start/end leave + mid-day leave), مجموع تاخیر غیرمجاز (cap 7:00 next to it), میزان تاخیر و تعجیل
+جبران نشده, باقیمانده مرخصی, مجموع تعجیل (cap 3:00), کارکرد نهایی (= normal + MIN(overtime, compensable)
++ start/end leave, without factors; the policy's `final_work_*_factor` are 0 so the bot's own text
+reports give the same figure). The file has no stored results: Excel or LibreOffice calculates on open.
+The test suite compares the generated sheet with the template cell for cell, and recalculates a
+generated file with LibreOffice to check it against the bot's own numbers.
+
+To change the structure, replace the template file with a new version of the organization's sheet
+(same column headers); no code change is needed.
 
 ## Staff list (`staff_list.xlsx`, admin panel → فهرست کارکنان)
 

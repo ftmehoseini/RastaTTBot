@@ -546,9 +546,10 @@ async def test_admin_attendance_report_and_role_management(bot: Harness, clock) 
     assert bot.documents(SEC)
     await bot.press(EMP, "adm:att:today")
     assert any("اجازه" in a for a in bot.alerts())
-    await bot.press(SEC, "adm:att:month")  # a whole month also gets the organization's timesheet
+    assert bot.documents(SEC)[-1].document.filename.startswith("timesheet_")  # any period: the timesheet
+    await bot.press(SEC, "adm:att:month")
     names = [d.document.filename for d in bot.documents(SEC)]
-    assert names[-2].startswith("timesheet_") and names[-1].startswith("attendance_all_")
+    assert len(names) == 2 and names[-1].startswith("timesheet_")  # one file, in the organization's structure
 
     async with bot.session_factory() as session:
         target = await bot.services(session).users.get_by_messenger_id(EMP)
