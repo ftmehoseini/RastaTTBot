@@ -111,6 +111,13 @@ I and J, and «توضیحات» (added to the bot's own notes). Check-in and che
 So a leave registered in the bot, or changed by hand in the file and uploaded again, shows in every
 export; clearing it in the file and uploading again removes it everywhere.
 
+**Results stored in every file the bot sends.** openpyxl saves formulas without results; desktop Excel
+recalculates only after «Enable Editing» (files from Telegram open in Protected View), and phone viewers
+and the Telegram preview never do, so they would show 0. Before sending (📥 downloads, admin reports and
+⬇️ an employee's own file), LibreOffice calculates a copy and each formula's result is stored in the same
+cell of the file (`app/infrastructure/excel/cached_values.py`). Formulas, formatting and comments are
+unchanged and Excel still recalculates on open. If LibreOffice fails, the file is sent as it was.
+
 To change the structure, replace the template file with a new version of the organization's sheet
 (same column headers); no code change is needed.
 

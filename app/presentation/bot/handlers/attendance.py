@@ -20,6 +20,7 @@ from app.core.utils.jalali import format_date, format_time, month_range, week_ra
 from app.core.utils.text import to_persian_digits
 from app.domain.attendance.models import CorrectionStatus, CorrectionType
 from app.domain.users.models import User
+from app.infrastructure.excel.cached_values import with_calculated_values
 from app.infrastructure.excel.recalc import RecalculationError
 from app.infrastructure.excel.reports import report_filename
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
@@ -248,6 +249,8 @@ async def my_excel(query: CallbackQuery, callback_data: AttCb, services: Service
     # What the admin set in the person's own Excel file (leave, notes) shows in the export too.
     file_rows = await workbook_file_rows(services, [user.id], report.start, report.end)
     content = await asyncio.to_thread(build_timesheet_workbook, [report], rules, holidays, file_rows=file_rows)
+    # The results go inside the file, so phones, the Telegram preview and Protected View show them too.
+    content = await asyncio.to_thread(with_calculated_values, content)
     filename = report_filename("timesheet_me", report.start, report.end)
     await send_file(query_message(query), content, filename)
 

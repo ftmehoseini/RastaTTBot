@@ -33,6 +33,7 @@ from app.core.utils.text import to_persian_digits
 from app.domain.leave.models import LeavePayType, LeaveUnit
 from app.domain.notifications.models import NotificationType
 from app.domain.users.models import User
+from app.infrastructure.excel.cached_values import with_calculated_values
 from app.infrastructure.excel.reports import report_filename
 from app.infrastructure.excel.roster import build_roster_workbook, parse_roster
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
@@ -143,6 +144,7 @@ async def _send_attendance(
     # What the admin set in each person's own Excel file (leave, notes) shows in the export too.
     file_rows = await workbook_file_rows(services, [r.user_id for r in reports], start, end)
     content = await asyncio.to_thread(build_timesheet_workbook, reports, rules, holidays, file_rows=file_rows)
+    content = await asyncio.to_thread(with_calculated_values, content)
     prefix = "timesheet_employee" if user_id else "timesheet"
     await send_file(message, content, report_filename(prefix, start, end))
 
@@ -655,6 +657,8 @@ async def workbook_download(query: CallbackQuery, callback_data: AdminCb, servic
     workbook = await services.workbooks.get(user, UUID(hex=callback_data.v))
     content = await services.workbooks.content(user, workbook)
     await query.answer("در حال ارسال فایل…")
+    # The results go inside the file, so phones, the Telegram preview and Protected View show them too.
+    content = await asyncio.to_thread(with_calculated_values, content)
     await send_file(
         query_message(query), content, workbook.title, caption=f"نسخه {to_persian_digits(workbook.version)}"
     )

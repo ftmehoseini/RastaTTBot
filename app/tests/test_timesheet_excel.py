@@ -210,3 +210,42 @@ async def test_libreoffice_recalculation_matches_the_bot(services, make_user, cl
         "Q35": m.final_work,  # the bot's own figure, with the organization's current formula (no factors)
     }
     assert {k: _minutes(ws[k].value) for k in summary} == summary
+
+
+# --- results stored in the file, so every app shows them -----------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice is not installed")
+async def test_sent_files_carry_their_calculated_results(services, make_user, clock) -> None:
+    """Phones, the Telegram preview and Excel's Protected View show stored results only: every formula
+    must have one, equal to what the formula gives, while formulas and styles stay as they were."""
+    from app.infrastructure.excel.cached_values import with_calculated_values
+
+    content, report = await _month_workbook(services, make_user, clock)
+    sent = with_calculated_values(content)
+    values = openpyxl.load_workbook(io.BytesIO(sent), data_only=True)["مریم کریمی"]
+    before = openpyxl.load_workbook(io.BytesIO(content), data_only=True)["مریم کریمی"]
+    assert before["Q35"].value is None  # what openpyxl writes: no results, so viewers show 0
+    m = report.sheet
+    assert _minutes(values["B32"].value) == m.normal
+    assert _minutes(values["L32"].value) == m.overtime
+    assert _minutes(values["Q35"].value) == m.final_work
+    assert _minutes(values["K26"].value) == 8 * 60 + 28  # 25 مهر: 08:38 → 17:06
+    formulas_before = openpyxl.load_workbook(io.BytesIO(content))["مریم کریمی"]
+    formulas_after = openpyxl.load_workbook(io.BytesIO(sent))["مریم کریمی"]
+    for row in formulas_before.iter_rows():
+        for cell in row:
+            after = formulas_after[cell.coordinate]
+            assert (after.value, after.style_id) == (cell.value, cell.style_id), cell.coordinate
+    assert formulas_after.parent.calculation.fullCalcOnLoad  # Excel still recalculates on open
+
+
+def test_a_file_is_sent_as_it_was_if_libreoffice_fails(monkeypatch) -> None:
+    import app.infrastructure.excel.cached_values as cached
+    from app.infrastructure.excel.recalc import RecalculationError
+
+    def broken(_content: bytes) -> bytes:
+        raise RecalculationError("soffice missing")
+
+    monkeypatch.setattr(cached, "recalculate", broken)
+    assert cached.with_calculated_values(b"original") == b"original"
