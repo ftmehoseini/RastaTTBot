@@ -258,6 +258,13 @@ def read_report(recalculated: bytes, month: int, day: int, expected: DayTimes | 
             if _minutes(cell.value, cell.number_format) != minutes:
                 report.errors.append(f"{header}: مقدار خوانده‌شده با مقدار ثبت‌شده یکی نیست")
 
+    report.month_values = _month_totals(sheet, layout, report.errors)
+    return report
+
+
+def _month_totals(sheet: Worksheet, layout: SheetLayout, errors: list[str]) -> list[tuple[str, str]]:
+    """Every «label:» under the day rows with the first value to its right (formula errors go to `errors`)."""
+    values: list[tuple[str, str]] = []
     for r in range(layout.last_day_row + 1, sheet.max_row + 1):
         cells = list(sheet[r])
         for index, cell in enumerate(cells):
@@ -268,11 +275,103 @@ def read_report(recalculated: bytes, month: int, day: int, expected: DayTimes | 
                 continue
             label = normalize_label(cell.value)
             if _is_error(target.value):
-                report.errors.append(f"{label}: {target.value}")
+                errors.append(f"{label}: {target.value}")
                 continue
             shown = display_value(target.value, target.number_format)
             if shown is not None:
-                report.month_values.append((label, shown))
+                values.append((label, shown))
+    return values
+
+
+def formula_columns(source: bytes) -> dict[int, set[int]]:
+    """Per month sheet, the columns the admin's formulas calculate (a formula in any day row).
+
+    Read from the stored file (formulas), not the recalculated copy (values only).
+    """
+    workbook = load_workbook(io.BytesIO(source))
+    result: dict[int, set[int]] = {}
+    for month, layout in month_sheets(workbook).items():
+        sheet = workbook[layout.title]
+        result[month] = {
+            col
+            for col in layout.labels
+            if any(
+                isinstance(v := sheet.cell(row, col).value, str) and v.startswith("=")
+                for row in layout.day_rows.values()
+            )
+        }
+    return result
+
+
+@dataclass
+class PeriodDay:
+    month: int
+    day: int
+    check_in: str | None
+    check_out: str | None
+    values: list[tuple[str, str]]  # the formula columns of that row (header, value)
+    notes: str | None
+
+
+@dataclass
+class PeriodReport:
+    sheet: str  # the month whose totals are given
+    days: list[PeriodDay] = field(default_factory=list)
+    month_values: list[tuple[str, str]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
+def _cell_text(sheet: Worksheet, layout: SheetLayout, row: int, col: int, where: str, errors: list[str]) -> str | None:
+    cell = sheet.cell(row, col)
+    if _is_error(cell.value):
+        errors.append(f"{where} {layout.labels.get(col, '')}: {cell.value}")
+        return None
+    return display_value(cell.value, cell.number_format)
+
+
+def read_period(source: bytes, recalculated: bytes, days: list[tuple[int, int]], summary_month: int) -> PeriodReport:
+    """Several days' rows (month, day) and one month's labelled totals, from one recalculated copy.
+
+    Days whose month sheet is missing are left out; a missing `summary_month` sheet is an error.
+    """
+    calculated_columns = formula_columns(source)
+    workbook = load_workbook(io.BytesIO(recalculated), data_only=True)
+    sheets = month_sheets(workbook)
+    summary = sheets.get(summary_month)
+    if summary is None:
+        raise WorkbookError(f"برگه‌ی ماه «{MONTH_NAMES[summary_month - 1]}» در فایل اکسل نیست.")
+    report = PeriodReport(sheet=summary.title)
+    for month, day in days:
+        layout = sheets.get(month)
+        row = layout.day_rows.get(day) if layout else None
+        if layout is None or row is None:
+            continue
+        sheet = workbook[layout.title]
+
+        def cell_text(col: int, sheet=sheet, layout=layout, row=row, day=day) -> str | None:
+            return _cell_text(sheet, layout, row, col, f"{layout.title} {day}", report.errors)
+
+        values = []
+        for col in sorted(calculated_columns.get(month, set())):
+            shown = cell_text(col)
+            if shown is not None:
+                values.append((layout.labels[col], shown))
+        notes_col = layout.columns.get(NOTES_HEADER)
+        report.days.append(
+            PeriodDay(
+                month=month,
+                day=day,
+                check_in=cell_text(layout.column(CHECK_IN_HEADER)),
+                check_out=cell_text(layout.column(CHECK_OUT_HEADER)),
+                values=values,
+                notes=cell_text(notes_col) if notes_col else None,
+            )
+        )
+    report.month_values = _month_totals(workbook[summary.title], summary, report.errors)
     return report
 
 

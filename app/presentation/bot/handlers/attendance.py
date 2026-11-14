@@ -12,14 +12,17 @@ from app.application.presenters import attendance as texts
 from app.application.presenters import workbook as workbook_texts
 from app.application.services.container import Services
 from app.application.use_cases.reminders import LEGACY_REMINDER_BUTTON, REMINDER_CHECK_IN, REMINDER_CHECK_OUT
+from app.application.use_cases.workbook_report import notify_admins_of_failure, workbook_period
 from app.core.exceptions import ConflictError, ExpiredActionError, ValidationError
 from app.core.logging import get_logger
-from app.core.utils.jalali import format_date, format_time
+from app.core.utils.jalali import format_date, format_time, month_range, week_range
 from app.core.utils.text import to_persian_digits
 from app.domain.attendance.models import CorrectionStatus, CorrectionType
 from app.domain.users.models import User
+from app.infrastructure.excel.recalc import RecalculationError
 from app.infrastructure.excel.reports import build_attendance_workbook, report_filename
 from app.infrastructure.excel.timesheet import build_timesheet_workbook
+from app.infrastructure.excel.workbook import WorkbookError
 from app.infrastructure.tasks import dispatch
 from app.presentation.bot.callbacks.data import OPEN_ATTENDANCE, AttCb, CalCb, CorrCb, KeyCb, NavCb, TimeCb
 from app.presentation.bot.handlers.common import (
@@ -189,8 +192,31 @@ async def punch_manual(query: CallbackQuery, callback_data: AttCb, state: FSMCon
 # --- weekly and monthly report ------------------------------------------------------------------
 
 
+async def _workbook_period_report(services: Services, user: User, kind: str) -> str | None:
+    """Weekly/monthly report from the person's Excel file; None when they have no file."""
+    today = services.time.today()
+    start, end = week_range(today) if kind == "week" else month_range(today)
+    title = "📊 گزارش هفتگی من" if kind == "week" else "📅 گزارش ماهانه من"
+    try:
+        run = await workbook_period(services, user.id, start, end, with_days=kind == "week")
+    except (WorkbookError, RecalculationError, OSError) as exc:
+        log.warning("workbook period report failed", user_id=str(user.id), kind=kind, error=str(exc))
+        workbook = await services.workbooks.for_user(user.id)
+        reason = str(exc) if isinstance(exc, WorkbookError) else "محاسبه‌ی فایل با LibreOffice انجام نشد."
+        await notify_admins_of_failure(services, user.full_name, workbook.title if workbook else "—", reason)
+        return workbook_texts.period_failed()
+    if run is None:
+        return None
+    labels = services.policy.attendance.workbook_report_labels
+    return workbook_texts.period_text(title, user.full_name, start, end, run.report, run.dates, labels)
+
+
 @router.callback_query(AttCb.filter(F.a == "week"))
 async def weekly_report(query: CallbackQuery, services: Services, user: User) -> None:
+    text = await _workbook_period_report(services, user, "week")
+    if text is not None:
+        await show(query, text, back_to_menu())
+        return
     report = await services.attendance.my_week(user)
     month = await services.attendance.my_month(user)
     markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="week_xls").pack())], back_row("att")])
@@ -199,6 +225,10 @@ async def weekly_report(query: CallbackQuery, services: Services, user: User) ->
 
 @router.callback_query(AttCb.filter(F.a == "month"))
 async def monthly_report(query: CallbackQuery, services: Services, user: User) -> None:
+    text = await _workbook_period_report(services, user, "month")
+    if text is not None:
+        await show(query, text, back_to_menu())
+        return
     report = await services.attendance.my_month(user)
     markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="month_xls").pack())], back_row("att")])
     # A whole month of day lines is too long for one message; the Excel file has the details.

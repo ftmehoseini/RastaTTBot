@@ -28,6 +28,14 @@ Any number of files; one per person. Only the super admin can do this.
 **After each check-in/out** the employee gets the time only («✅ ورود شما ثبت شد …»), then the report
 from the file. People without a file keep the bot's own reply.
 
+**«📊 گزارش هفتگی من» / «📅 گزارش ماهانه من»** for people with a file are read from the file too
+(recalculated by LibreOffice when the button is pressed). Weekly: each day's check-in/out and the
+columns the formulas calculate (zeros hidden), then the month's totals. Monthly: the month's totals.
+Which totals, and in which order: `attendance.workbook_report_labels` in `config/default.yaml`
+(labels as written in the file, without «:»; `[]` = all of them; if none of them is in a file, all of
+that file's totals are shown). The bot adds nothing up itself: a week has no totals of its own because
+the workbook has none.
+
 **Safety:** a new version of the file is saved on every change (the last 50 are kept, on the data volume
 under `workbooks/`); LibreOffice works on a copy; one person's file is written by one job at a time
 (Redis lock). If the month sheet is missing, a formula shows an error (#VALUE!, …), or LibreOffice fails,

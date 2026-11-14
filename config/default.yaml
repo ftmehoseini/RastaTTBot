@@ -59,6 +59,16 @@ attendance:
   allow_future_manual_correction: false
   max_manual_correction_age_days: 30
   manual_correction_requires_approval: false
+  # People with an admin-uploaded Excel workbook: the month totals in their weekly and monthly report,
+  # written exactly as the labels in the file (without «:»), in this order. [] = every labelled total.
+  workbook_report_labels:
+    - "مجموع اضافه کار"
+    - "مجموع تاخیر مجاز"
+    - "مجموع تاخیر غیرمجاز"
+    - "مجموع تعجیل"
+    - "مقدار تاخیر و تعجیل قابل جبران"
+    - "مقدار اضافه کار مازاد بر نیاز"
+    - "میزان تاخیر و تعجیل جبران نشده"
 
 leave:
   require_rejection_reason: true

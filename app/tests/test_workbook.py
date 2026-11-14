@@ -358,3 +358,108 @@ async def test_a_report_that_telegram_refuses_is_not_counted_as_sent(
     messenger.fail_chats.add(employee.chat_id)  # e.g. the employee blocked the bot
     run = await update_workbook(services, employee.id, work_date)
     assert run.status == "not_delivered" and run.report is not None and run.report.ok
+
+
+# --- weekly and monthly reports from the Excel file -----------------------------------------------------
+
+
+def test_only_the_configured_month_totals_are_shown_in_order() -> None:
+    from app.application.presenters.workbook import pick_totals
+
+    values = [("کارکرد نهایی", "5:12"), ("مجموع تعجیل", "0:00"), ("مجموع اضافه کار", "4:54")]
+    assert pick_totals(values, ["مجموع اضافه کار", "مجموع تعجیل:"]) == [
+        ("مجموع اضافه کار", "4:54"),
+        ("مجموع تعجیل", "0:00"),
+    ]
+    assert pick_totals(values, []) == values  # nothing configured: everything
+    assert pick_totals(values, ["برچسبی که در فایل نیست"]) == values  # another form: everything, not nothing
+
+
+@needs_libreoffice
+def test_period_report_reads_the_days_and_the_month_totals() -> None:
+    from app.application.presenters.workbook import period_text
+    from app.infrastructure.excel.recalc import recalculate
+    from app.infrastructure.excel.workbook import read_period
+
+    source = write_times(sample_workbook(), AZAR, [DayTimes(3, 9 * 60 + 40, 17 * 60 + 5), DayTimes(4, 8 * 60, None)])
+    report = read_period(source, recalculate(source), [(AZAR, 3), (AZAR, 4), (AZAR, 5), (10, 1)], AZAR)
+    assert report.ok, report.errors
+    days = {d.day: d for d in report.days}
+    assert (days[3].check_in, days[3].check_out) == ("9:40", "17:05")
+    assert dict(days[3].values) == {"ساعت مفید": "7:25", "تاخیر غیر مجاز": "0:10"}  # formula columns only
+    assert days[5].check_in is None and 1 not in days  # دی has no sheet: left out
+    dates = [to_gregorian(1405, AZAR, d) for d in (3, 4, 5)]
+    text = period_text("📊 گزارش هفتگی من", "مریم", dates[0], dates[-1], report, dates, ["کارکرد نهایی"])
+    assert "ورود ۹:۴۰ | خروج ۱۷:۰۵" in text and "ساعت مفید ۷:۲۵" in text
+    assert "بدون ثبت ورود و خروج" in text  # day 5
+    # Day 4 has no check-out yet: the formula exit − entry gives −8:00, and Excel's total includes it.
+    assert "ورود ۸:۰۰ | خروج —" in text and "ساعت مفید -۸:۰۰" in text
+    assert "▪️ کارکرد نهایی: -۰:۴۵" in text and "مجموع ساعت مفید" not in text  # only the configured total
+    assert "یکشنبه یکشنبه" not in text
+
+
+async def test_weekly_and_monthly_buttons_read_the_excel_file_for_people_who_have_one(
+    session_factory, policy, clock, tmp_path, monkeypatch
+) -> None:
+    from app.core.config.settings import get_settings
+    from app.infrastructure.tasks import dispatch
+    from app.presentation.bot.callbacks.data import AttCb
+    from app.tests.test_bot_flows import Harness
+
+    if shutil.which("soffice") is None:
+        pytest.skip("LibreOffice is not installed")
+    monkeypatch.setattr(get_settings(), "workbook_dir", tmp_path)
+    monkeypatch.setattr(dispatch, "enqueue_workbook_update", lambda *a, **k: None)
+    policy.attendance.workbook_report_labels = ["مجموع ساعت مفید", "کارکرد نهایی"]
+    bot = Harness(session_factory, policy, clock)
+    await bot.register(7201, "مدیر سیستم", RoleCode.SUPER_ADMIN)
+    await bot.register(7202, "مریم کریمی")
+    await bot.register(7203, "علی رضایی")  # no Excel file
+    async with session_factory() as session:
+        services = bot.services(session)
+        admin = await services.users.get_by_messenger_id(7201)
+        employee = await services.users.get_by_messenger_id(7202)
+        # 27 مهر (the clock's today) has a check-in and check-out in the file
+        content = write_times(sample_workbook(months=("مهر",)), 7, [DayTimes(27, 9 * 60, 17 * 60)])
+        workbook = await services.workbooks.upload(admin, "maryam.xlsx", content)
+        await services.workbooks.assign(admin, workbook.id, employee.id)
+
+    clock.set(tehran(2026, 10, 19, 18, 0))
+    await bot.press(7202, AttCb(a="week").pack())
+    week = bot.last_text(7202)
+    assert "(از فایل اکسل)" in week and "ورود ۹:۰۰ | خروج ۱۷:۰۰" in week and "ساعت مفید ۸:۰۰" in week
+    assert "▪️ مجموع ساعت مفید: ۸:۰۰" in week and "▪️ کارکرد نهایی: ۸:۰۰" in week
+    await bot.press(7202, AttCb(a="month").pack())
+    month = bot.last_text(7202)
+    assert "گزارش ماهانه من (از فایل اکسل)" in month and "▪️ کارکرد نهایی: ۸:۰۰" in month
+    assert "▫️" not in month  # monthly: totals only
+
+    await bot.press(7203, AttCb(a="week").pack())  # without a file: the bot's own report, as before
+    assert "گزارش هفتگی من" in bot.last_text(7203) and "از فایل اکسل" not in bot.last_text(7203)
+
+
+async def test_a_broken_file_gives_a_clear_message_and_alerts_the_admin(
+    session_factory, policy, clock, tmp_path, monkeypatch
+) -> None:
+    import app.application.use_cases.workbook_report as flow
+    from app.core.config.settings import get_settings
+    from app.presentation.bot.callbacks.data import AttCb
+    from app.tests.test_bot_flows import Harness
+
+    def broken(_content: bytes) -> bytes:
+        raise RecalculationError("soffice crashed")
+
+    monkeypatch.setattr(get_settings(), "workbook_dir", tmp_path)
+    monkeypatch.setattr(flow, "recalculate", broken)
+    bot = Harness(session_factory, policy, clock)
+    await bot.register(7301, "مدیر سیستم", RoleCode.SUPER_ADMIN)
+    await bot.register(7302, "مریم کریمی")
+    async with session_factory() as session:
+        services = bot.services(session)
+        admin = await services.users.get_by_messenger_id(7301)
+        employee = await services.users.get_by_messenger_id(7302)
+        workbook = await services.workbooks.upload(admin, "maryam.xlsx", sample_workbook(months=("مهر",)))
+        await services.workbooks.assign(admin, workbook.id, employee.id)
+    await bot.press(7302, AttCb(a="month").pack())
+    assert "آماده نشد" in bot.last_text(7302) and "۰:" not in bot.last_text(7302)
+    assert "LibreOffice" in bot.last_text(7301)

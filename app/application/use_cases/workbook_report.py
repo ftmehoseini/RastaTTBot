@@ -20,11 +20,19 @@ from app.application.services.container import Services
 from app.application.services.notification_service import SendOutcome
 from app.core.logging import get_logger
 from app.core.security.rbac import RoleCode
-from app.core.utils.jalali import month_range, to_jalali
+from app.core.utils.jalali import iter_days, month_range, to_jalali
 from app.domain.attendance.models import AttendanceRecord
 from app.domain.notifications.models import NotificationType
 from app.infrastructure.excel.recalc import RecalculationError, recalculate
-from app.infrastructure.excel.workbook import DayTimes, WorkbookError, WorkbookReport, read_report, write_times
+from app.infrastructure.excel.workbook import (
+    DayTimes,
+    PeriodReport,
+    WorkbookError,
+    WorkbookReport,
+    read_period,
+    read_report,
+    write_times,
+)
 from app.infrastructure.repositories.attendance import AttendanceRepository
 from app.infrastructure.repositories.users import UserRepository
 
@@ -107,3 +115,40 @@ async def update_workbook(
         user, texts.report_text(full_name, work_date, report), NotificationType.GENERIC
     )
     return WorkbookRun("sent" if outcome == SendOutcome.SENT else "not_delivered", report=report)
+
+
+@dataclass(frozen=True)
+class PeriodRun:
+    report: PeriodReport
+    dates: list[date]  # the days asked for, in order (a day whose month sheet is missing has no row)
+
+
+async def workbook_period(
+    services: Services, user_id: UUID, start: date, end: date, with_days: bool
+) -> PeriodRun | None:
+    """The person's days from `start` to `end` (not after today) and the current month's totals, all
+    read from their Excel file after LibreOffice recalculates a copy. None when they have no file.
+
+    Raises WorkbookError or RecalculationError; the caller tells the person and the admins.
+    """
+    workbook = await services.workbooks.repo.for_user(user_id)
+    if workbook is None:
+        return None
+    today = services.time.today()
+    dates = iter_days(start, min(end, today)) if with_days else []
+    source = await asyncio.to_thread(services.workbook_store.read, workbook.id, workbook.version)
+    recalculated = await asyncio.to_thread(recalculate, source)
+    wanted = [(to_jalali(d).month, to_jalali(d).day) for d in dates]
+    report = await asyncio.to_thread(read_period, source, recalculated, wanted, to_jalali(min(end, today)).month)
+    if not report.ok:
+        raise WorkbookError("خطای فرمول در فایل: " + "، ".join(report.errors[:5]))
+    return PeriodRun(report, dates)
+
+
+async def notify_admins_of_failure(services: Services, full_name: str, title: str, reason: str) -> None:
+    for admin in await UserRepository(services.session).list_active_with_role(RoleCode.SUPER_ADMIN):
+        await services.notifications.notify_user(
+            admin,
+            texts.report_failed_for_admin(full_name, services.time.today(), title, reason),
+            NotificationType.GENERIC,
+        )

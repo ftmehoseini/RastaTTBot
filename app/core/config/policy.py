@@ -26,6 +26,17 @@ WEEKDAY_FA = {
 }
 
 
+DEFAULT_WORKBOOK_REPORT_LABELS = (
+    "مجموع اضافه کار",
+    "مجموع تاخیر مجاز",
+    "مجموع تاخیر غیرمجاز",
+    "مجموع تعجیل",
+    "مقدار تاخیر و تعجیل قابل جبران",
+    "مقدار اضافه کار مازاد بر نیاز",
+    "میزان تاخیر و تعجیل جبران نشده",
+)
+
+
 def _parse_time(value: Any) -> time | None:
     if value is None or value == "":
         return None
@@ -94,6 +105,9 @@ class AttendancePolicy(BaseModel):
     allow_future_manual_correction: bool = False
     max_manual_correction_age_days: int = Field(default=30, ge=0)
     manual_correction_requires_approval: bool = False
+    # People with an Excel workbook: the month totals (labels as written in the file, without «:»)
+    # shown in their weekly and monthly report, in this order. Empty = every labelled total.
+    workbook_report_labels: list[str] = Field(default_factory=lambda: list(DEFAULT_WORKBOOK_REPORT_LABELS))
 
     _parse_times = field_validator(
         "standard_start_time",
