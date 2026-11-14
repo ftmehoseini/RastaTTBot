@@ -441,6 +441,15 @@ async def test_weekly_and_monthly_buttons_read_the_excel_file_for_people_who_hav
     assert "گزارش ماهانه من (از فایل اکسل)" in month and "▪️ کارکرد نهایی: ۸:۰۰" in month
     assert "▫️" not in month  # monthly: totals only
 
+    # Both reports offer the Excel file, and it arrives (regression: the button was missing for them)
+    assert AttCb(a="month_xls").pack() in bot.buttons(7202)
+    await bot.press(7202, AttCb(a="month_xls").pack())
+    await bot.press(7202, AttCb(a="week").pack())
+    assert AttCb(a="week_xls").pack() in bot.buttons(7202)
+    await bot.press(7202, AttCb(a="week_xls").pack())
+    names = [d.document.filename for d in bot.documents(7202)]
+    assert len(names) == 2 and all(n.startswith("timesheet_me_") for n in names)
+
     await bot.press(7203, AttCb(a="week").pack())  # without a file: the bot's own report, as before
     assert "گزارش هفتگی من" in bot.last_text(7203) and "از فایل اکسل" not in bot.last_text(7203)
 

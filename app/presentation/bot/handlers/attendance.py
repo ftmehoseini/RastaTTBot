@@ -214,24 +214,24 @@ async def _workbook_period_report(services: Services, user: User, kind: str) -> 
 
 @router.callback_query(AttCb.filter(F.a == "week"))
 async def weekly_report(query: CallbackQuery, services: Services, user: User) -> None:
+    markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="week_xls").pack())], back_row("att")])
     text = await _workbook_period_report(services, user, "week")
     if text is not None:
-        await show(query, text, back_to_menu())
+        await show(query, text, markup)
         return
     report = await services.attendance.my_week(user)
     month = await services.attendance.my_month(user)
-    markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="week_xls").pack())], back_row("att")])
     await show(query, texts.employee_report(report, month=month), markup)
 
 
 @router.callback_query(AttCb.filter(F.a == "month"))
 async def monthly_report(query: CallbackQuery, services: Services, user: User) -> None:
+    markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="month_xls").pack())], back_row("att")])
     text = await _workbook_period_report(services, user, "month")
     if text is not None:
-        await show(query, text, back_to_menu())
+        await show(query, text, markup)
         return
     report = await services.attendance.my_month(user)
-    markup = inline([[button("📥 دریافت فایل اکسل", AttCb(a="month_xls").pack())], back_row("att")])
     # A whole month of day lines is too long for one message; the Excel file has the details.
     await show(query, texts.monthly_report(report), markup)
 
