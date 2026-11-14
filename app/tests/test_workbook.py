@@ -327,7 +327,8 @@ async def test_admin_assigns_a_file_and_check_in_replies_with_the_time_only(
     clock.set(tehran(2026, 10, 19, 17, 30))
     await bot.press(emp_id, AttCb(a="out").pack())
     await bot.press(emp_id, next(b for b in bot.buttons(emp_id) if b.startswith("att:out_ok")))
-    assert "خروج شما ثبت شد" in bot.last_text(emp_id) and "فایل اکسل" in bot.last_text(emp_id)
+    assert "خروج شما ثبت شد" in bot.last_text(emp_id) and "۱۷:۳۰" in bot.last_text(emp_id)
+    assert "گزارش" not in bot.last_text(emp_id)  # no report after a check-out either: only on request
 
     # Someone without a file keeps the bot's own reply.
     other_id = 7003
@@ -484,3 +485,43 @@ async def test_a_check_in_alone_is_written_but_not_reported(services, make_user,
     assert openpyxl.load_workbook(io.BytesIO(store.read(workbook.id, workbook.version)))["آذر"]["D18"].value == time(
         9, 40
     )
+
+
+def test_the_worker_writes_the_times_without_sending_a_report(monkeypatch) -> None:
+    """The background job after a punch only writes the file; reports are on request."""
+    import app.infrastructure.tasks.jobs as jobs
+
+    calls: list[dict] = []
+
+    async def fake_update(services, user_id, work_date, **kwargs):
+        calls.append(kwargs)
+        return type("Run", (), {"status": "written", "error": None})()
+
+    class FakeLock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            pass
+
+    class FakeRedis:
+        def lock(self, *args, **kwargs):
+            return FakeLock()
+
+        def close(self) -> None:
+            pass
+
+    class FakeUnitOfWork:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *args):
+            return False
+
+    monkeypatch.setattr(jobs, "update_workbook", fake_update)
+    monkeypatch.setattr(jobs.Redis, "from_url", staticmethod(lambda url: FakeRedis()))
+    monkeypatch.setattr(jobs, "unit_of_work", FakeUnitOfWork)
+    import uuid
+
+    assert jobs.workbook_update(str(uuid.uuid4()), "2026-12-08", False) == {"status": "written", "error": None}
+    assert calls == [{"sync_month": False, "send_report": False}]

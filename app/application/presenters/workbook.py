@@ -9,14 +9,10 @@ from app.infrastructure.excel.workbook import PeriodReport, WorkbookReport, norm
 PUNCH_LABEL = {"in": "ورود", "out": "خروج"}
 
 
-REPORT_FOLLOWS = "📊 گزارش محاسبه‌شده از فایل اکسل شما چند لحظه‌ی دیگر ارسال می‌شود."
-
-
 def punch_saved_short(kind: str, at_local: datetime) -> str:
-    """The reply right after check-in/out: the time only. After a check-out the Excel report follows;
-    after a check-in there is none (the day isn't complete yet)."""
-    text = f"✅ {PUNCH_LABEL[kind]} شما ثبت شد.\n📅 {format_date(at_local.date())}\n🕘 ساعت {format_time(at_local)}"
-    return f"{text}\n{REPORT_FOLLOWS}" if kind == "out" else text
+    """The reply right after check-in/out: the time only. No report follows; the employee asks for one
+    with «گزارش هفتگی من» or «گزارش ماهانه من»."""
+    return f"✅ {PUNCH_LABEL[kind]} شما ثبت شد.\n📅 {format_date(at_local.date())}\n🕘 ساعت {format_time(at_local)}"
 
 
 def report_text(full_name: str, work_date: date, report: WorkbookReport) -> str:

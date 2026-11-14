@@ -119,7 +119,7 @@ def broadcast_menu_task(actor_id: str, menu_id: str) -> dict[str, Any] | None:
 
 @celery_app.task(name="attendance.workbook_update")
 def workbook_update(user_id: str, work_date: str, sync_month: bool = False) -> dict[str, Any] | None:
-    """Write a person's check-in/out into their Excel workbook and send what Excel calculated.
+    """Write a person's check-in/out into their Excel workbook (no message; reports are on request).
 
     One person at a time: the lock waits (instead of skipping) so every punch gets its report.
     """
@@ -139,7 +139,8 @@ def workbook_update(user_id: str, work_date: str, sync_month: bool = False) -> d
                     UUID(user_id),
                     date.fromisoformat(work_date),
                     sync_month=sync_month,
-                    send_report=not sync_month,
+                    # Reports are sent only on request («گزارش هفتگی/ماهانه من»), never after a punch.
+                    send_report=False,
                 )
 
         result = asyncio.run(runner())

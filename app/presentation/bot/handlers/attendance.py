@@ -503,9 +503,7 @@ async def correction_confirm(query: CallbackQuery, state: FSMContext, services: 
                 "\nدر گزارش‌ها با علامت ✏️ نمایش داده می‌شود."
             )
             queued = await _queue_workbook(services, user, day)
-            if queued == "queued" and result.record.check_out_at is not None:
-                text += "\n📊 گزارش اکسل این روز چند لحظه‌ی دیگر ارسال می‌شود."
-            elif queued == "failed":
+            if queued == "failed":
                 text += QUEUE_FAILED
         await show(query, text, back_to_menu())
         return
@@ -528,9 +526,7 @@ async def correction_confirm(query: CallbackQuery, state: FSMContext, services: 
         text = "📨 ثبت فراموشی شما ذخیره شد و پس از تأیید مدیر اعمال می‌شود."
     else:
         text = "✅ ثبت فراموشی انجام شد و در گزارش‌ها با علامت 📝 نمایش داده می‌شود."
-        if queued == "queued" and result.record.check_out_at is not None:
-            text += "\n📊 گزارش اکسل این روز چند لحظه‌ی دیگر ارسال می‌شود."
-        elif queued == "failed":
+        if queued == "failed":
             text += QUEUE_FAILED
     await show(query, text, back_to_menu())
 
