@@ -30,6 +30,7 @@ class Permission(StrEnum):
     LEAVE_APPROVE_STEP_1 = "leave.approve_step_1"
     LEAVE_APPROVE_STEP_2 = "leave.approve_step_2"
     LEAVE_REPORT_ALL = "leave.report_all"
+    LEAVE_REGISTER = "leave.register"  # an admin registers a leave directly into the employee's Excel file
     FOOD_ORDER = "food.order"
     FOOD_MENU_MANAGE = "food.menu_manage"
     FOOD_BROADCAST = "food.broadcast"
@@ -48,6 +49,7 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
             Permission.ATTENDANCE_REPORT_ALL,
             Permission.LEAVE_APPROVE_STEP_1,
             Permission.LEAVE_REPORT_ALL,
+            Permission.LEAVE_REGISTER,
             Permission.FOOD_MENU_MANAGE,
             Permission.FOOD_BROADCAST,
             Permission.FOOD_REPORT_ALL,
@@ -59,6 +61,7 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
             Permission.ATTENDANCE_REPORT_ALL,
             Permission.LEAVE_APPROVE_STEP_2,
             Permission.LEAVE_REPORT_ALL,
+            Permission.LEAVE_REGISTER,
             Permission.FOOD_REPORT_ALL,
             Permission.USERS_VIEW,
         }

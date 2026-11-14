@@ -2,7 +2,7 @@
 
 import asyncio
 import io
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from uuid import UUID
 
 from aiogram import Bot, F, Router
@@ -15,13 +15,21 @@ from app.application.presenters import attendance as att_texts
 from app.application.presenters import leave as leave_texts
 from app.application.services import access
 from app.application.services.container import Services
+from app.application.use_cases.register_leave import (
+    CANCEL_HINT,
+    LeaveInput,
+    describe,
+    full_time_employees,
+    plan_leave,
+    register_leave,
+)
 from app.core.config.policy import WEEKDAY_FA, WEEKDAY_ORDER
 from app.core.config.settings import get_settings
-from app.core.exceptions import ExpiredActionError, NotFoundError, PermissionDeniedError, ValidationError
+from app.core.exceptions import AppError, ExpiredActionError, NotFoundError, PermissionDeniedError, ValidationError
 from app.core.security.rbac import ROLE_TITLES_FA, Permission, RoleCode, is_admin
 from app.core.utils.jalali import format_date, format_date_numeric, month_range, previous_month_range, week_range
 from app.core.utils.text import to_persian_digits
-from app.domain.leave.models import OPEN_LEAVE_STATUSES
+from app.domain.leave.models import OPEN_LEAVE_STATUSES, LeavePayType, LeaveUnit
 from app.domain.notifications.models import NotificationType
 from app.domain.users.models import User
 from app.infrastructure.excel.reports import build_leave_workbook, report_filename
@@ -31,13 +39,22 @@ from app.infrastructure.integrations.messenger import to_markup
 from app.infrastructure.tasks import dispatch
 from app.presentation.api.health import check_redis
 from app.presentation.bot.callbacks.data import AdminCb, CalCb, NavCb, UserAdminCb
-from app.presentation.bot.handlers.common import picker_range, query_message, send_file, show, start_picker
+from app.presentation.bot.handlers.common import (
+    check_hhmm,
+    parse_typed_date,
+    picker_range,
+    query_message,
+    reply,
+    send_file,
+    show,
+    start_picker,
+)
 from app.presentation.bot.handlers.leave import approval_buttons
 from app.presentation.bot.keyboards.common import back_row, button, chunk, confirm_rows, inline, step_row
 from app.presentation.bot.keyboards.pickers import calendar_for
 from app.presentation.bot.middlewares.filters import IsRegistered
 from app.presentation.bot.modules import BTN_ADMIN, module_enabled
-from app.presentation.bot.states.flows import ReportRange, RosterUpload, WorkbookUpload
+from app.presentation.bot.states.flows import LeaveRegister, ReportRange, RosterUpload, WorkbookUpload
 
 router = Router(name="admin")
 router.message.filter(IsRegistered())
@@ -80,6 +97,8 @@ def panel_markup(user: User):
                 button("📤 مرخصی‌های باز", AdminCb(a="lv_xls", v="open").pack()),
             ]
         )
+    if access.can(user, Permission.LEAVE_REGISTER):
+        rows.append([button("📝 ثبت مرخصی", AdminCb(a="lr", v="0").pack())])
     if access.can(user, Permission.USERS_VIEW):
         rows.append([button("👥 کاربران و نقش‌ها", UserAdminCb(a="list", p=0).pack())])
     if access.can(user, Permission.USERS_MANAGE_ROLES):
@@ -707,9 +726,17 @@ async def _person_workbook_screen(services: Services, user: User, target: User) 
         rows.append([button("❌ بدون فایل اکسل", AdminCb(a="wb_set", v="none").pack())])
     rows.append([button("📤 بارگذاری فایل جدید", AdminCb(a="wb_up").pack())])
     rows.append([button("🔙 کارت کاربر", UserAdminCb(a="view", u=target.id.hex).pack())])
+    replace_warning = (
+        "⚠️ اگر فایل دیگری انتخاب کنید، فایل فعلی کنار گذاشته می‌شود (نسخه‌هایش روی سرور می‌ماند). "
+        "ورود و خروج‌های این ماه در فایل جدید دوباره نوشته می‌شود، اما مرخصی‌ها و تغییرات دیگر فایل فعلی نه. "
+        "برای اینکه چیزی از دست نرود، اول «⬇️ دریافت فایل فعلی» را بزنید و فایل جدید را از روی همان بسازید.\n\n"
+        if current
+        else ""
+    )
     text = (
         f"📊 فایل اکسل حضور {target.full_name}\n"
         f"فایل فعلی: {current.title if current else '— (گزارش معمولی ربات)'}\n\n"
+        + replace_warning
         + (
             "فایلی را که ورود و خروج این کارمند باید در آن نوشته شود انتخاب کنید:"
             if items
@@ -754,3 +781,200 @@ async def person_workbook_set(
         except Exception:
             note += "\n⚠️ نوشتن ورود و خروج‌های این ماه در فایل فعلاً ممکن نشد؛ با اولین ثبت بعدی انجام می‌شود."
     await show(query, f"{note}\n\n{text}", markup)
+
+
+# --- leave registered by an admin, written into the employee's Excel file ---------------------------------
+
+LR_TITLE = "📝 ثبت مرخصی"
+LR_PAGE_SIZE = 8
+
+
+def _lr_input(data: dict) -> LeaveInput:
+    try:
+        return LeaveInput(
+            employee_id=UUID(hex=data["lr_user"]),
+            pay_type=LeavePayType(data["lr_pay"]),
+            unit=LeaveUnit(data["lr_unit"]),
+            day=date.fromordinal(data["lr_day"]),
+            start=time.fromisoformat(data["lr_x"]) if data.get("lr_x") else None,
+            end=time.fromisoformat(data["lr_y"]) if data.get("lr_y") else None,
+        )
+    except (KeyError, ValueError):
+        raise ExpiredActionError() from None
+
+
+@router.callback_query(AdminCb.filter(F.a == "lr"))
+async def leave_register_start(
+    query: CallbackQuery, callback_data: AdminCb, state: FSMContext, services: Services, user: User
+) -> None:
+    """Step 1: the employee (full-time only)."""
+    employees = await full_time_employees(services, user)
+    page = int(callback_data.v or 0)
+    await state.clear()
+    await state.set_state(LeaveRegister.choosing)
+    chunk_ = employees[page * LR_PAGE_SIZE : (page + 1) * LR_PAGE_SIZE]
+    rows = [[button(f"👤 {u.full_name}", AdminCb(a="lr_u", v=u.id.hex).pack())] for u in chunk_]
+    nav = []
+    if page > 0:
+        nav.append(button("◀️ قبلی", AdminCb(a="lr", v=str(page - 1)).pack()))
+    if (page + 1) * LR_PAGE_SIZE < len(employees):
+        nav.append(button("بعدی ▶️", AdminCb(a="lr", v=str(page + 1)).pack()))
+    if nav:
+        rows.append(nav)
+    rows.append(back_row("admin"))
+    text = f"{LR_TITLE}\n۱/۴ — کارمند را انتخاب کنید (فقط کارکنان تمام‌وقت):"
+    if not employees:
+        text = f"{LR_TITLE}\nکارمند تمام‌وقت فعالی وجود ندارد."
+    await show(query, text, inline(rows))
+
+
+@router.callback_query(StateFilter(LeaveRegister.choosing), AdminCb.filter(F.a == "lr_u"))
+async def leave_register_employee(
+    query: CallbackQuery, callback_data: AdminCb, state: FSMContext, services: Services, user: User
+) -> None:
+    """Step 2: the leave type (the existing ones: paid / unpaid)."""
+    access.require(user, Permission.LEAVE_REGISTER)
+    employee = await services.users.get(UUID(hex=callback_data.v))
+    await state.update_data(lr_user=employee.id.hex, lr_name=employee.full_name)
+    rows = [
+        [
+            button("💰 با حقوق", AdminCb(a="lr_t", v=LeavePayType.PAID.value).pack()),
+            button("بدون حقوق", AdminCb(a="lr_t", v=LeavePayType.UNPAID.value).pack()),
+        ],
+        [button("🔙 مرحله‌ی قبل", AdminCb(a="lr", v="0").pack())],
+    ]
+    await show(query, f"{LR_TITLE} — {employee.full_name}\n۲/۴ — نوع مرخصی:", inline(rows))
+
+
+@router.callback_query(StateFilter(LeaveRegister.choosing), AdminCb.filter(F.a == "lr_t"))
+async def leave_register_type(query: CallbackQuery, callback_data: AdminCb, state: FSMContext, user: User) -> None:
+    """Step 3: daily or hourly."""
+    access.require(user, Permission.LEAVE_REGISTER)
+    await state.update_data(lr_pay=LeavePayType(callback_data.v).value)
+    data = await state.get_data()
+    rows = [
+        [
+            button("📅 روزانه", AdminCb(a="lr_n", v=LeaveUnit.DAILY.value).pack()),
+            button("🕘 ساعتی", AdminCb(a="lr_n", v=LeaveUnit.HOURLY.value).pack()),
+        ],
+        [button("🔙 مرحله‌ی قبل", AdminCb(a="lr_u", v=data.get("lr_user", "")).pack())],
+    ]
+    await show(query, f"{LR_TITLE} — {data.get('lr_name', '')}\n۳/۴ — مدت مرخصی:", inline(rows))
+
+
+@router.callback_query(StateFilter(LeaveRegister.choosing), AdminCb.filter(F.a == "lr_n"))
+async def leave_register_unit(
+    query: CallbackQuery, callback_data: AdminCb, state: FSMContext, services: Services, user: User
+) -> None:
+    """Step 4: the date (both kinds); hourly then asks for x and y."""
+    access.require(user, Permission.LEAVE_REGISTER)
+    await state.update_data(lr_unit=LeaveUnit(callback_data.v).value, lr_x=None, lr_y=None)
+    min_date, max_date = services.leave.date_window()
+    back = AdminCb(a="lr_t", v=(await state.get_data()).get("lr_pay", "PAID")).pack()
+    await start_picker(state, min_date, max_date, back=back)
+    await show(
+        query,
+        f"{LR_TITLE}\n۴/۴ — تاریخ مرخصی را انتخاب کنید (یا بنویسید، مثل ۱۴۰۵/۰۸/۲۵):",
+        calendar_for("lr_d", services.time.today(), min_date, max_date, back=back),
+    )
+
+
+async def _leave_register_date(target, state: FSMContext, services: Services, user: User, day: date) -> None:
+    min_date, max_date = services.leave.date_window()
+    if not min_date <= day <= max_date:
+        await reply(target, f"❌ تاریخ باید بین {format_date(min_date)} و {format_date(max_date)} باشد.")
+        return
+    await state.update_data(lr_day=day.toordinal())
+    data = await state.get_data()
+    if data.get("lr_unit") == LeaveUnit.HOURLY.value:
+        await state.set_state(LeaveRegister.typing_start)
+        await reply(
+            target,
+            f"{LR_TITLE} — {format_date(day)}\n🕘 ساعت شروع مرخصی (x) را بنویسید، مثل ۰۸:۰۰\n"
+            "برای انصراف /cancel را بزنید.",
+        )
+        return
+    await _leave_register_preview(target, state, services, user)
+
+
+@router.callback_query(StateFilter(LeaveRegister.choosing), CalCb.filter((F.p == "lr_d") & (F.a == "d")))
+async def leave_register_date(
+    query: CallbackQuery, callback_data: CalCb, state: FSMContext, services: Services, user: User
+) -> None:
+    await _leave_register_date(query, state, services, user, date.fromordinal(callback_data.v))
+
+
+@router.message(StateFilter(LeaveRegister.choosing), F.text)
+async def leave_register_date_typed(message: Message, state: FSMContext, services: Services, user: User) -> None:
+    data = await state.get_data()
+    day = parse_typed_date(message.text or "")
+    if "lr_unit" not in data or day is None:
+        await message.answer("❌ تاریخ را به شکل ۱۴۰۵/۰۸/۲۵ بنویسید یا از دکمه‌ها انتخاب کنید.")
+        return
+    await _leave_register_date(message, state, services, user, day)
+
+
+@router.message(StateFilter(LeaveRegister.typing_start), F.text)
+async def leave_register_start_time(message: Message, state: FSMContext) -> None:
+    value, error = check_hhmm(message.text or "")
+    if value is None:
+        await message.answer(error or "❌ ساعت درست نیست.")
+        return
+    await state.update_data(lr_x=value.isoformat(timespec="minutes"))
+    await state.set_state(LeaveRegister.typing_end)
+    await message.answer(f"✅ شروع: {to_persian_digits(value.strftime('%H:%M'))}\n🕘 ساعت پایان مرخصی (y) را بنویسید:")
+
+
+@router.message(StateFilter(LeaveRegister.typing_end), F.text)
+async def leave_register_end_time(message: Message, state: FSMContext, services: Services, user: User) -> None:
+    value, error = check_hhmm(message.text or "")
+    if value is None:
+        await message.answer(error or "❌ ساعت درست نیست.")
+        return
+    data = await state.get_data()
+    if data.get("lr_x") and value <= time.fromisoformat(data["lr_x"]):
+        await message.answer("❌ ساعت پایان باید بعد از ساعت شروع باشد. دوباره بنویسید:")
+        return
+    await state.update_data(lr_y=value.isoformat(timespec="minutes"))
+    await _leave_register_preview(message, state, services, user)
+
+
+async def _leave_register_preview(target, state: FSMContext, services: Services, user: User) -> None:
+    """Every check before anything is written; a problem is shown and nothing changes."""
+    data = await state.get_data()
+    try:
+        plan = await plan_leave(services, user, _lr_input(data))
+    except AppError as exc:
+        await state.set_state(LeaveRegister.choosing)
+        await reply(
+            target,
+            f"❌ {exc.user_message}\n\nچیزی در فایل اکسل تغییر نکرد.",
+            inline([[button("🔁 از اول", AdminCb(a="lr", v="0").pack())], back_row("admin")]),
+        )
+        return
+    await state.set_state(LeaveRegister.confirming)
+    await reply(
+        target,
+        f"{LR_TITLE} — پیش‌نمایش\n\n{to_persian_digits(describe(plan))}\n\nثبت شود؟",
+        inline(confirm_rows(AdminCb(a="lr_ok").pack())),
+    )
+
+
+@router.callback_query(StateFilter(LeaveRegister.confirming), AdminCb.filter(F.a == "lr_ok"))
+async def leave_register_confirm(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    data = await state.get_data()
+    await state.clear()
+    plan = await register_leave(services, user, _lr_input(data))
+    await show(
+        query,
+        f"✅ مرخصی در فایل اکسل ثبت شد (نسخه {to_persian_digits(plan.workbook.version)}).\n\n"
+        f"{to_persian_digits(describe(plan))}\n\n{CANCEL_HINT}",
+        inline([[button("📝 ثبت مرخصی دیگر", AdminCb(a="lr", v="0").pack())], back_row("admin")]),
+    )
+
+
+@router.callback_query(AdminCb.filter(F.a == "lr_ok"))
+@router.callback_query(AdminCb.filter(F.a.in_({"lr_u", "lr_t", "lr_n"})))
+@router.callback_query(CalCb.filter(F.p == "lr_d"))
+async def leave_register_stale(query: CallbackQuery) -> None:
+    raise ExpiredActionError()

@@ -38,6 +38,13 @@ class RosterUpload(StatesGroup):
     confirming = State()
 
 
+class LeaveRegister(StatesGroup):
+    choosing = State()  # employee, leave type and daily/hourly via buttons; the date via the calendar
+    typing_start = State()  # x
+    typing_end = State()  # y
+    confirming = State()
+
+
 class WorkbookUpload(StatesGroup):
     waiting_file = State()
 

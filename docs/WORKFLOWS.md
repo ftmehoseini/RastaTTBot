@@ -100,3 +100,36 @@ Reports: «📊 گزارش این هفته / هفته بعد» (per day: portion
 | کاربران و نقش‌ها | `users.view` (edit: `users.manage_roles`) | List → user card → toggle roles / activate. The user is notified |
 | فهرست کارکنان (ثبت‌نام) | `users.manage_roles` | Counts (registered / not yet) → download the list (also the empty template) → upload a new list → preview (new, changed, removed, linked, kept) → confirm |
 | وضعیت سیستم | `system.health` | Database/Redis status and server time |
+
+## Leave registered by an admin (written into the employee's Excel file)
+
+🛠 پنل مدیریت → **📝 ثبت مرخصی** (secretary, manager and super admin; permission `leave.register`,
+checked on every step). Works whether or not the employee leave module (`BOT_MODULES`) is on.
+
+1. Employee: active, full-time only (hourly staff are not listed and are refused).
+2. Type: the existing ones, با حقوق / بدون حقوق.
+3. Duration: روزانه or ساعتی.
+4. Date (calendar or typed, within `leave.max_past_days` / `leave.max_future_days`); for hourly leave the
+   start x and end y are typed as HH:MM.
+5. Preview: the case and the cells that will change → confirm.
+
+The employee's **uploaded Excel file is the only record**: the cells of that day's row are overwritten
+(a new version of the file is saved; older versions stay on the server) and the registration is kept in
+the audit log (`LEAVE_REGISTERED_BY_ADMIN`). The employee gets a message. There is no cancel button: to
+cancel or correct a leave, the admin downloads the file (employee card → 📊 فایل اکسل حضور), clears the
+cells and uploads it again.
+
+Cases (`app/domain/leave/excel_rules.py`). E/F/G are read from the employee's row of that day
+(08:00 / 09:30 / 16:48 in the organization's sheet):
+
+| Case | Condition | Cells written |
+|---|---|---|
+| 1 start of the day | x ≤ F and y < G | E = E + (y − x), F = y, J = y − x |
+| 2 middle of the day | x > F and y < G | I = y − x (nothing else) |
+| 3 end of the day | x > F and y = G | G = x, J = y − x |
+| daily | — | J = G − E (the whole official day, 8:48) |
+
+Refused, with nothing written: x ≥ y, x before E, y after G, x ≤ F with y = G (use daily leave), an
+employee who is hourly, inactive or has no Excel file, a file without the month's sheet, that day's row
+or the needed columns, and a day whose I or J already has a value.
+

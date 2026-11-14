@@ -92,7 +92,7 @@ references adjusted.
 | A روز, B ماه, C تاریخ | bot | Weekday, Jalali month, day |
 | D ساعت ورود, H ساعت خروج | bot | Times (a check-out after midnight is more than 24 h; a check-out without a check-in is left out and noted) |
 | E شروع شناوری, F پایان شناوری, G ساعت مجاز خروج | bot | 8:00, 9:30, 16:48 from the policy. Day off with presence: E = F = G = check-in (all overtime). Hourly staff: E = F = check-in and G = check-out (no lateness or early departure) |
-| I مرخصی وسط روز, J مرخصي اول و آخر | — | **Empty for now**: the rules for filling them will be defined. An approved leave is described in Q |
+| I مرخصی وسط روز, J مرخصي اول و آخر | — | Empty in the bot's generated files. In an employee's uploaded file they are filled by **📝 ثبت مرخصی** (see WORKFLOWS.md) |
 | K ساعت مفید … P اضافه کار روزانه | **formulas** | The template's formulas, character for character |
 | Q توضیحات | bot | Holiday, leave, missing time, ثبت فراموشی / ثبت دستی / ویرایش‌شده |
 

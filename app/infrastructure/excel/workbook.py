@@ -173,6 +173,53 @@ def write_times(content: bytes, month: int, days: list[DayTimes]) -> bytes:
     return buffer.getvalue()
 
 
+def _day_cell(content: bytes, month: int, day: int):
+    workbook = load_workbook(io.BytesIO(content))
+    layout = month_sheets(workbook).get(month)
+    if layout is None:
+        raise WorkbookError(f"برگه‌ی ماه «{MONTH_NAMES[month - 1]}» در فایل اکسل این کارمند نیست.")
+    row = layout.day_rows.get(day)
+    if row is None:
+        raise WorkbookError(f"ردیف روز {day} در برگه‌ی «{layout.title}» پیدا نشد.")
+    return workbook, layout, workbook[layout.title], row
+
+
+def read_day_cells(content: bytes, month: int, day: int) -> dict[str, object]:
+    """The stored (not recalculated) values of a day's row, by normalized header. Raises WorkbookError."""
+    _, layout, sheet, row = _day_cell(content, month, day)
+    return {header: sheet.cell(row, col).value for header, col in layout.columns.items()}
+
+
+def cell_minutes(value: object) -> int | None:
+    """A typed time cell as minutes after midnight (None for empty, text or a formula)."""
+    if isinstance(value, str) or value is None:
+        return None
+    return _minutes(value, "h:mm")
+
+
+def write_cells(content: bytes, month: int, day: int, cells: dict[str, int]) -> bytes:
+    """Write times (minutes) into the given columns of a day's row; nothing else changes.
+
+    Columns are found by header text. Raises WorkbookError if a column is missing.
+    """
+    workbook, layout, sheet, row = _day_cell(content, month, day)
+    targets = {}
+    for header, minutes in cells.items():
+        col = layout.columns.get(normalize_label(header))
+        if col is None:
+            raise WorkbookError(f"برگه‌ی «{layout.title}» ستون «{header}» را ندارد.")
+        targets[col] = minutes
+    for col, minutes in targets.items():
+        cell = sheet.cell(row, col)
+        cell.value = _clock(minutes)
+        if cell.number_format in ("General", ""):
+            cell.number_format = "h:mm"
+    workbook.calculation.fullCalcOnLoad = True
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 # --- reading ------------------------------------------------------------------------------------------
 
 
