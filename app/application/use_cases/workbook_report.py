@@ -90,7 +90,9 @@ async def update_workbook(
             await asyncio.to_thread(services.workbook_store.save, workbook.id, workbook.version + 1, content)
             workbook.version += 1
             await services.session.commit()
-        if not send_report:
+        # A day with only a check-in is not reported: without the check-out the formulas give
+        # meaningless figures (e.g. a negative «ساعت مفید»). The report follows the check-out.
+        if not send_report or (not sync_month and (today is None or today.check_out is None)):
             return WorkbookRun("written")
         recalculated = await asyncio.to_thread(recalculate, content)
         report = await asyncio.to_thread(read_report, recalculated, month, to_jalali(work_date).day, today)

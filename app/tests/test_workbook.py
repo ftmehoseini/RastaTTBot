@@ -251,7 +251,7 @@ async def test_recalculation_failure_keeps_the_written_times_but_sends_no_figure
     employee = await make_user("کارمند")
     workbook = await services.workbooks.upload(admin, "a.xlsx", sample_workbook())
     await services.workbooks.assign(admin, workbook.id, employee.id)
-    work_date = await _punch(services, employee, clock, 17, time(9, 40), None)
+    work_date = await _punch(services, employee, clock, 17, time(9, 40), time(17, 5))
     run = await update_workbook(services, employee.id, work_date)
     assert run.status == "failed"
     assert "ساعت" not in messenger.texts_to(employee.chat_id)[-1].split("\n")[0]
@@ -319,9 +319,15 @@ async def test_admin_assigns_a_file_and_check_in_replies_with_the_time_only(
     confirm = next(b for b in bot.buttons(emp_id) if b.startswith("att:in_ok"))
     await bot.press(emp_id, confirm)
     reply = bot.last_text(emp_id)
-    assert "ورود شما ثبت شد" in reply and "فایل اکسل" in reply
+    assert "ورود شما ثبت شد" in reply and "۰۹:۰۳" in reply
     assert "تأخیر" not in reply  # no figures calculated by the bot
-    assert queued[-1] == ((employee.id, date(2026, 10, 19)), {})
+    assert "گزارش" not in reply  # no report after a check-in; it follows the check-out
+    assert queued[-1] == ((employee.id, date(2026, 10, 19)), {})  # the check-in is still written to the file
+
+    clock.set(tehran(2026, 10, 19, 17, 30))
+    await bot.press(emp_id, AttCb(a="out").pack())
+    await bot.press(emp_id, next(b for b in bot.buttons(emp_id) if b.startswith("att:out_ok")))
+    assert "خروج شما ثبت شد" in bot.last_text(emp_id) and "فایل اکسل" in bot.last_text(emp_id)
 
     # Someone without a file keeps the bot's own reply.
     other_id = 7003
@@ -329,7 +335,7 @@ async def test_admin_assigns_a_file_and_check_in_replies_with_the_time_only(
     await bot.press(other_id, AttCb(a="in").pack())
     await bot.press(other_id, next(b for b in bot.buttons(other_id) if b.startswith("att:in_ok")))
     assert "تأخیر" in bot.last_text(other_id) and "فایل اکسل" not in bot.last_text(other_id)
-    assert len(queued) == 2
+    assert len(queued) == 3  # assignment, check-in, check-out of the person with a file
 
 
 async def test_the_files_screen_is_for_super_admins_only(session_factory, policy, clock, tmp_path, monkeypatch) -> None:
@@ -463,3 +469,18 @@ async def test_a_broken_file_gives_a_clear_message_and_alerts_the_admin(
     await bot.press(7302, AttCb(a="month").pack())
     assert "آماده نشد" in bot.last_text(7302) and "۰:" not in bot.last_text(7302)
     assert "LibreOffice" in bot.last_text(7301)
+
+
+async def test_a_check_in_alone_is_written_but_not_reported(services, make_user, store, clock, messenger) -> None:
+    admin = await make_user("مدیر", RoleCode.SUPER_ADMIN)
+    employee = await make_user("کارمند")
+    workbook = await services.workbooks.upload(admin, "a.xlsx", sample_workbook())
+    await services.workbooks.assign(admin, workbook.id, employee.id)
+    work_date = await _punch(services, employee, clock, 17, time(9, 40), None)
+    sent_before = len(messenger.sent)
+    run = await update_workbook(services, employee.id, work_date)
+    assert run.status == "written" and len(messenger.sent) == sent_before  # no message after check-in
+    await services.session.refresh(workbook)
+    assert openpyxl.load_workbook(io.BytesIO(store.read(workbook.id, workbook.version)))["آذر"]["D18"].value == time(
+        9, 40
+    )

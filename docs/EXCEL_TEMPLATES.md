@@ -25,8 +25,10 @@ Any number of files; one per person. Only the super admin can do this.
 | Day report | Every other column of that day's row, by its header (روز and ماه are skipped) |
 | Month report | Every label under the day rows that ends with «:», and the first value to its right |
 
-**After each check-in/out** the employee gets the time only («✅ ورود شما ثبت شد …»), then the report
-from the file. People without a file keep the bot's own reply.
+**After a check-in** the employee gets the time only («✅ ورود شما ثبت شد …»); the check-in is written
+into the file but no report is sent, because without the check-out the formulas give meaningless
+figures. **After a check-out** (or a forgotten entry or edit that completes the day) the report from
+the file follows a few seconds later. People without a file keep the bot's own reply.
 
 **«📊 گزارش هفتگی من» / «📅 گزارش ماهانه من»** for people with a file are read from the file too
 (recalculated by LibreOffice when the button is pressed). Weekly: each day's check-in/out and the
