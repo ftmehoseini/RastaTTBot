@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from uuid import UUID
 
+from app.core.utils.jalali import SATURDAY, weekday_name
 from app.domain.food.models import FoodGuestOrder, FoodMenu, FoodMenuItem, FoodOrder
 
 
@@ -91,6 +92,41 @@ class Invoice:
     @property
     def total(self) -> int:
         return self.employee_amount + self.guest_amount
+
+
+@dataclass(frozen=True)
+class MonthBill:
+    """One person's food for a Jalali month (own meals only: there are no guests)."""
+
+    user_id: UUID
+    full_name: str
+    year: int
+    month: int
+    start: date
+    end: date
+    lines: list[InvoiceLine]  # one per dish, by date
+
+    @property
+    def meals(self) -> int:
+        return sum(line.quantity for line in self.lines)
+
+    @property
+    def total(self) -> int:
+        return sum(line.total for line in self.lines)
+
+    def by_weekday(self) -> list[tuple[str, list[str]]]:
+        """«شنبه: ماکارونی، مرغ، …» — every dish of the month's Saturdays, then Sundays, … (from Saturday)."""
+        groups: dict[int, list[InvoiceLine]] = {}
+        for line in sorted(self.lines, key=lambda line: line.day):
+            groups.setdefault(line.day.weekday(), []).append(line)
+        order = sorted(groups, key=lambda wd: (wd - SATURDAY) % 7)
+        return [
+            (
+                weekday_name(groups[wd][0].day),
+                [line.food_name + (f" × {line.quantity}" if line.quantity > 1 else "") for line in groups[wd]],
+            )
+            for wd in order
+        ]
 
 
 @dataclass(frozen=True)

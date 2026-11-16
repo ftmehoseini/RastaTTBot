@@ -16,6 +16,7 @@ from app.application.dto.food import (
     Invoice,
     InvoiceLine,
     MenuImportPreview,
+    MonthBill,
     OrderResult,
     WeekOrderResult,
 )
@@ -24,7 +25,7 @@ from app.core.config.policy import Policy
 from app.core.exceptions import ConflictError, DeadlinePassedError, NotFoundError, ValidationError
 from app.core.security.rbac import Permission
 from app.core.utils.clock import TimeService
-from app.core.utils.jalali import format_time, iter_days, week_range
+from app.core.utils.jalali import format_time, iter_days, month_range, to_jalali, week_range
 from app.domain.audit.models import AuditAction
 from app.domain.food.models import (
     ORDER_STATUS_FA,
@@ -424,6 +425,38 @@ class FoodService:
             guest_meals=sum(line.quantity for line in guest_lines),
             guest_amount=sum(line.total for line in guest_lines),
         )
+
+    # --- monthly bill ---------------------------------------------------------------------------
+
+    def _month_bill(self, user: User, start: date, end: date, orders: list[FoodOrder]) -> MonthBill:
+        j = to_jalali(start)
+        lines = [
+            InvoiceLine(
+                o.order_date, i.food_name, False, i.quantity, i.unit_price_toman, i.quantity * i.unit_price_toman
+            )
+            for o in orders
+            for i in o.items
+        ]
+        lines.sort(key=lambda line: line.day)
+        return MonthBill(user.id, user.full_name, j.year, j.month, start, end, lines)
+
+    async def month_bill(self, user: User, day: date | None = None) -> MonthBill:
+        """The person's own bill for the Jalali month of `day` (default: this month)."""
+        access.require(user, Permission.FOOD_ORDER)
+        start, end = month_range(day or self.time.today())
+        return self._month_bill(user, start, end, await self.repo.orders_between(start, end, user.id))
+
+    async def team_month_bills(self, actor: User, day: date) -> list[MonthBill]:
+        """Everyone who ordered in that Jalali month, by name."""
+        access.require(actor, Permission.FOOD_REPORT_ALL)
+        start, end = month_range(day)
+        orders = await self.repo.orders_between(start, end)
+        users = await self.users.get_many({o.user_id for o in orders})
+        bills = [
+            self._month_bill(u, start, end, [o for o in orders if o.user_id == u.id])
+            for u in sorted(users.values(), key=lambda u: u.full_name)
+        ]
+        return [b for b in bills if b.lines]
 
     # --- admin: menu import ---------------------------------------------------------------------
 

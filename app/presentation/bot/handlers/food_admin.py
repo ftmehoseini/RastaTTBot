@@ -3,7 +3,7 @@
 import asyncio
 import io
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -15,16 +15,27 @@ from aiogram.types import CallbackQuery, Message
 from app.application.presenters import food as texts
 from app.application.services import access
 from app.application.services.container import Services
-from app.application.use_cases.food_broadcast import announce, announcement_message, broadcast_menu, notify_lost_dishes
+from app.application.use_cases.food_broadcast import (
+    announce,
+    announcement_message,
+    broadcast_menu,
+    notify_lost_dishes,
+    send_month_bills,
+)
 from app.core.config.settings import get_settings
 from app.core.exceptions import ExpiredActionError, PermissionDeniedError, ValidationError
 from app.core.logging import get_logger
 from app.core.security.rbac import Permission
-from app.core.utils.jalali import format_date_numeric, week_range
-from app.core.utils.text import to_persian_digits
+from app.core.utils.jalali import format_date_numeric, month_label, month_range, to_jalali, week_range
+from app.core.utils.text import format_money, to_persian_digits
 from app.domain.users.models import User
 from app.infrastructure.excel.menu_parser import build_menu_template, parse_menu
-from app.infrastructure.excel.reports import build_food_orders_workbook, build_invoices_workbook, report_filename
+from app.infrastructure.excel.reports import (
+    build_food_orders_workbook,
+    build_invoices_workbook,
+    build_month_bills_workbook,
+    report_filename,
+)
 from app.presentation.bot.callbacks.data import FoodAdminCb
 from app.presentation.bot.handlers.common import query_message, send_file, show
 from app.presentation.bot.keyboards.common import back_row, button, cancel_row, confirm_rows, inline
@@ -62,6 +73,8 @@ def admin_markup(user: User):
                 button("🧾 صورت‌حساب‌ها", FoodAdminCb(a="invoices").pack()),
             ]
         )
+        if access.can(user, Permission.FOOD_BROADCAST):
+            rows.append([button("📨 ارسال صورت‌حساب ماهانه", FoodAdminCb(a="mbill").pack())])
     rows.append(back_row("food"))
     return inline(rows)
 
@@ -351,4 +364,72 @@ async def invoices(query: CallbackQuery, services: Services, user: User) -> None
         start, end = invoices[0].week_start, invoices[0].week_end
         await send_file(
             message, build_invoices_workbook(invoices, currency), report_filename("food_invoices", start, end)
+        )
+
+
+# --- monthly bills: preview with the Excel file, then each person gets their own ------------------
+
+
+def _bill_month(services: Services, v: str) -> date:
+    """«0» = this month, «1» = last month → a day in that Jalali month."""
+    today = services.time.today()
+    return month_range(today)[0] - timedelta(days=1) if v == "1" else today
+
+
+@router.callback_query(FoodAdminCb.filter(F.a == "mbill"))
+async def month_bills_start(query: CallbackQuery, user: User) -> None:
+    access.require(user, Permission.FOOD_BROADCAST)
+    rows = [
+        [
+            button("📅 ماه قبل", FoodAdminCb(a="mbill_p", v="1").pack()),
+            button("📅 این ماه", FoodAdminCb(a="mbill_p", v="0").pack()),
+        ],
+        back_row("food"),
+    ]
+    await show(query, "📨 ارسال صورت‌حساب ماهانه\nصورت‌حساب کدام ماه برای هر نفر ارسال شود؟", inline(rows))
+
+
+@router.callback_query(FoodAdminCb.filter(F.a == "mbill_p"))
+async def month_bills_preview(query: CallbackQuery, callback_data: FoodAdminCb, services: Services, user: User) -> None:
+    access.require(user, Permission.FOOD_BROADCAST)
+    day = _bill_month(services, callback_data.v)
+    bills = await services.food.team_month_bills(user, day)
+    j = to_jalali(day)
+    title = month_label(j.year, j.month)
+    if not bills:
+        await show(query, f"در {title} سفارشی ثبت نشده است.", inline([back_row("food")]))
+        return
+    currency = services.policy.food.currency_label
+    total = sum(b.total for b in bills)
+    text = (
+        f"📨 صورت‌حساب ماهانه‌ی {title}\n"
+        f"تعداد افراد: {to_persian_digits(len(bills))} نفر\n"
+        f"جمع کل: {format_money(total, currency)}\n\n"
+        "فایل اکسل همه در پیام بعد است. برای هر نفر صورت‌حساب خودش ارسال شود؟"
+    )
+    await show(query, text, inline(confirm_rows(FoodAdminCb(a="mbill_ok", v=day.isoformat()).pack())))
+    start, end = month_range(day)
+    await send_file(
+        query_message(query),
+        build_month_bills_workbook(bills, currency),
+        report_filename("food_month_bills", start, end),
+    )
+
+
+@router.callback_query(FoodAdminCb.filter(F.a == "mbill_ok"))
+async def month_bills_send(query: CallbackQuery, callback_data: FoodAdminCb, services: Services, user: User) -> None:
+    access.require(user, Permission.FOOD_BROADCAST)
+    day = date.fromisoformat(callback_data.v)
+    try:
+        from app.infrastructure.tasks.celery_app import celery_app
+
+        celery_app.send_task("food.send_month_bills", args=[str(user.id), day.isoformat()])
+        await show(query, "📨 ارسال صورت‌حساب‌ها آغاز شد و در پس‌زمینه انجام می‌شود. نتیجه برای شما ارسال می‌شود.")
+    except Exception:
+        log.warning("celery unavailable, sending month bills inline", exc_info=True)
+        await show(query, "📨 در حال ارسال صورت‌حساب‌ها…")
+        result = await send_month_bills(services, user.id, day)
+        await query_message(query).answer(
+            f"✅ ارسال شد: {to_persian_digits(result.sent)} | ناموفق: {to_persian_digits(result.failed)}"
+            f" | قبلاً ارسال‌شده: {to_persian_digits(result.skipped)}"
         )

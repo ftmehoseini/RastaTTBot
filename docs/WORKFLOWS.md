@@ -46,9 +46,9 @@ Employee sub-menu: منو و سفارش هفته · صورت‌حساب من · 
 
 **Today («🍛 سفارش امروز»).** Today's dishes → choose → confirm, as before. After `ordering_deadline_time` on the day itself, ordering, changing and cancelling are refused.
 
-**Guest order («👥 سفارش مهمان»).** One screen with every day still open for guests and its dishes with prices: «➕ day · dish · price · ×N» adds one guest portion, «➖» next to it removes one (two buttons per row for Soroush). The message shows the guest deadline and the running total; nothing is saved until «✅ ثبت سفارش مهمان (N پرس)». Each dish/day is then set to exactly that count; a count brought back to 0 cancels that guest order; at most `max_guest_count_per_order` (10) per dish per day; days that closed meanwhile are reported as not changed. «↩️ برگرداندن به سفارش‌های ثبت‌شده» discards unsaved changes. Guest meals are stored, reported and billed separately from the employee's own meal. (The old step-by-step guest buttons in earlier messages still work.)
+**Guest order.** Switched off (`food.allow_guest_orders: false`): there are no guests, and the guest screens answer «فعال نیست». Guests are not in the bill. The code is kept, so setting it back to `true` brings it back.
 
-**Bill («🧾 صورت‌حساب من»).** This week's lines (own and guest), totals, and the payment details from `payment.*`, with «🗑 لغو مهمان» for guest orders still open and «🧾 صورت‌حساب هفته‌ی بعد» when there are orders next week. (The former «📊 گزارش غذای این هفته» showed the same; its buttons in old messages open the bill.)
+**Bill («🧾 صورت‌حساب من»).** The Jalali month's bill: one line per weekday with every dish of that weekday in the month, in date order (e.g. «شنبه: ماکارونی، مرغ، کوفته»), then the number of meals, «💰 مجموع بدهی» and the payment details from `payment.*`. «◀️ صورت‌حساب ماه قبل» shows last month. (Older bill and report buttons in chats open it too.)
 
 ### Admin
 
@@ -61,6 +61,8 @@ When a new menu version drops a dish someone had ordered (own or guest, on a day
 «📣 اطلاع‌رسانی» → pick a ready text (`food.announcement_samples`: «منو هفتگی آپلود شد…», «در منو تغییراتی رخ داد…») or «✍️ متن دلخواه» and type one (≤ 1000 characters) → preview with the recipient count (every active user) → confirm → sent in the background in rate-limited batches, each with a «🍽 ثبت سفارش غذا» button. Each announcement is sent once; pressing the same confirmation again is refused. The admin receives a delivery summary. Sending an announcement marks the latest menu as announced.
 
 Once the week's menu has been announced (`food.notify_food_admins_of_changes`), every food admin gets one message per confirmed change: the weekly screen, today's order, cancelling, guest orders and cancelling a guest order, e.g. «🍽 مریم کریمی سفارش غذا را تغییر داد: • دوشنبه ۲۷/۷: جوجه کباب». Before the announcement nothing is sent, so the first wave of orders doesn't flood them. A failure to send never affects the order.
+
+«📨 ارسال صورت‌حساب ماهانه» (`food.broadcast`) → «این ماه» / «ماه قبل» → number of people, total and an Excel file of everyone (totals + every dish by date) → confirm → each person who ordered that month gets their own monthly bill, in the background. Each bill is sent once per person per month; pressing again only reaches people who didn't get it.
 
 Reports: «📊 گزارش این هفته / هفته بعد» (per day: portions per dish, guests, total) · «📥 فایل سفارش‌ها» (detailed Excel for this week and next) · «🧾 صورت‌حساب‌ها» (per-employee weekly invoice Excel, which also refreshes `food_weekly_summaries`).
 

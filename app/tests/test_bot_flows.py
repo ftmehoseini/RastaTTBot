@@ -429,20 +429,17 @@ async def test_food_order_and_admin_reports(bot: Harness, clock) -> None:
     await bot.press(EMP, FoodCb(a="item", v=item_id.hex).pack())
     await bot.press(EMP, FoodCb(a="ok", v=item_id.hex).pack())
     assert "ثبت شد" in bot.last_text(EMP)
-    await bot.press(EMP, FoodCb(a="guest").pack())
-    assert "سفارش مهمان" in bot.last_text(EMP)
-    await bot.press(EMP, FoodCb(a="gp", v=item_id.hex).pack())
-    await bot.press(EMP, FoodCb(a="gp", v=item_id.hex).pack())
-    await bot.press(EMP, FoodCb(a="g_wok").pack())
+    await bot.press(EMP, FoodCb(a="guest").pack())  # there are no guests
+    assert "فعال نیست" in bot.last_text(EMP)
     await bot.press(EMP, FoodCb(a="invoice").pack())
-    assert "۶۳۰٬۰۰۰" in bot.last_text(EMP)  # 1 + 2 guests × 210,000
+    assert "مجموع بدهی: ۲۱۰٬۰۰۰" in bot.last_text(EMP)
 
     clock.set(tehran(2026, 10, 19, 10, 30))
     await bot.press(EMP, FoodCb(a="ok", v=item_id.hex).pack())
     assert any("مهلت" in a for a in bot.alerts())
 
     await bot.press(SEC, "fa:summary:0")
-    assert "جوجه کباب: ۱ پرس" in bot.last_text(SEC) and "مهمان: ۲ پرس" in bot.last_text(SEC)
+    assert "جوجه کباب: ۱ پرس" in bot.last_text(SEC)
     await bot.press(SEC, "fa:orders_xls:")
     await bot.press(SEC, "fa:invoices:")
     assert len(bot.documents(SEC)) == 2
@@ -798,13 +795,14 @@ async def test_order_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
 
     # One bill; the old report's buttons in chats open it too
     await bot.press(EMP, FoodCb(a="invoice").pack())
-    assert "صورت‌حساب غذای این هفته" in bot.last_text(EMP) and "۲۱۰٬۰۰۰" in bot.last_text(EMP)
+    assert "صورت‌حساب غذای مهر ۱۴۰۵" in bot.last_text(EMP) and "۲۱۰٬۰۰۰" in bot.last_text(EMP)
     await bot.press(EMP, FoodCb(a="week").pack())
     assert "صورت‌حساب" in bot.last_text(EMP) and not any("منقضی" in a for a in bot.alerts())
 
 
 async def test_guest_orders_for_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
     """➕/➖ per dish, nothing saved until confirmed, 0 cancels, the limit of 10, closed days reported."""
+    bot.policy.food.allow_guest_orders = True  # guests are off in the settings; the code is kept
     from sqlalchemy import select
 
     from app.domain.food.models import FoodGuestOrder, OrderStatus
@@ -937,10 +935,80 @@ async def test_food_admin_announces_and_hears_about_order_changes(bot: Harness, 
     assert len(notices) == 1
     assert "مریم کریمی سفارش غذا را تغییر داد" in notices[0]
     assert "دوشنبه ۲۷/۷: جوجه کباب" in notices[0] and "سه‌شنبه ۲۸/۷: قیمه" in notices[0]
-    await bot.press(EMP, FoodCb(a="guest").pack())
-    await bot.press(EMP, FoodCb(a="gp", v=items["قیمه"].hex).pack())
-    await bot.press(EMP, FoodCb(a="g_wok").pack())
-    assert "مهمان سه‌شنبه ۲۸/۷: قیمه × ۱" in bot.texts(SEC)[-1]
     await bot.press(EMP, FoodCb(a="cancel", v=str(date(2026, 10, 19).toordinal())).pack())
     assert "دوشنبه ۲۷/۷: لغو شد" in bot.texts(SEC)[-1]
     assert not any("تغییر داد" in t for t in bot.texts(MGR))  # only food admins
+
+
+async def test_monthly_bill_per_weekday_and_sent_to_each_person(bot: Harness, clock, monkeypatch) -> None:
+    """«شنبه: …، …» per weekday of the Jalali month + total debt; the food admin sends each person theirs."""
+    from app.infrastructure.tasks.celery_app import celery_app
+    from app.presentation.bot.callbacks.data import FoodAdminCb
+
+    def no_broker(*args, **kwargs):
+        raise ConnectionError("no broker in tests")
+
+    monkeypatch.setattr(celery_app, "send_task", no_broker)
+    OTHER = 5004
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(OTHER, "علی رضایی")
+    await bot.register(SEC, "سارا منشی", RoleCode.FOOD_ADMIN)
+    # Two Mondays and a Tuesday of مهر ۱۴۰۵ (Mon 1405/07/20 and 07/27, Tue 07/28), ordered in time.
+    rows = [
+        ["1405/07/20", "دوشنبه", "ماکارونی", 150000, 1],
+        ["1405/07/21", "سه شنبه", "کوفته", 160000, 1],
+    ]
+    async with bot.session_factory() as session:
+        services = bot.services(session)
+        food_admin = await services.users.get_by_messenger_id(SEC)
+        emp = await services.users.get_by_messenger_id(EMP)
+        clock.set(tehran(2026, 10, 12, 8, 0))  # Monday 1405/07/20
+        week1 = (
+            await services.food.import_menu(
+                food_admin, parse_menu(menu_file(rows), date(2026, 10, 12), 10**8), "a", None
+            )
+        ).menu
+        clock.set(tehran(2026, 10, 19, 7, 0))
+        week2 = (
+            await services.food.import_menu(
+                food_admin, parse_menu(menu_file(VALID_ROWS), date(2026, 10, 19), 10**8), "b", None
+            )
+        ).menu
+        first = {i.food_name: i.id for i in week1.items}
+        second = {i.food_name: i.id for i in week2.items}
+        clock.set(tehran(2026, 10, 12, 8, 0))
+        await services.food.place_order(emp, first["ماکارونی"])
+        clock.set(tehran(2026, 10, 19, 8, 0))
+        await services.food.place_order(emp, second["جوجه کباب"])
+        await services.food.place_order(emp, second["قیمه"])
+
+    await bot.press(EMP, FoodCb(a="invoice").pack())
+    bill = bot.last_text(EMP)
+    assert "صورت‌حساب غذای مهر ۱۴۰۵" in bill
+    assert "دوشنبه: ماکارونی، جوجه کباب" in bill  # both Mondays of the month on one line, by date
+    assert "سه‌شنبه: قیمه" in bill
+    assert bill.index("دوشنبه:") < bill.index("سه‌شنبه:")
+    assert "تعداد غذا: ۳ پرس" in bill and "مجموع بدهی: ۵۳۵٬۰۰۰ تومان" in bill  # 150k + 210k + 175k
+    assert "مهمان" not in bill
+    await bot.press(EMP, FoodCb(a="invoice", v="prev").pack())
+    assert "شهریور ۱۴۰۵" in bot.last_text(EMP) and "سفارشی ثبت نکرده‌اید" in bot.last_text(EMP)
+
+    # The food admin: pick the month → count, total and the Excel file → confirm → each gets their own.
+    await bot.text(SEC, "🍽 سفارش غذا")
+    await bot.press(SEC, FoodAdminCb(a="menu").pack())
+    assert FoodAdminCb(a="mbill").pack() in bot.buttons(SEC)
+    await bot.press(SEC, FoodAdminCb(a="mbill").pack())
+    await bot.press(SEC, FoodAdminCb(a="mbill_p", v="0").pack())
+    assert bot.documents(SEC)[-1].document.filename.startswith("food_month_bills")
+    preview = next(t for t in reversed(bot.texts(SEC)) if "صورت‌حساب ماهانه‌ی" in t)
+    assert "تعداد افراد: ۱ نفر" in preview and "۵۳۵٬۰۰۰" in preview
+    before = len(bot.texts(EMP))
+    ok = next(b for b in bot.buttons(SEC) if b.startswith("fa:mbill_ok:"))
+    await bot.press(SEC, ok)
+    sent = bot.texts(EMP)[before:]
+    assert len(sent) == 1 and "دوشنبه: ماکارونی، جوجه کباب" in sent[0]
+    assert not any("صورت‌حساب غذای" in t for t in bot.texts(OTHER))  # no orders, no bill
+    await bot.press(SEC, ok)  # pressed again: nobody gets it twice
+    assert len(bot.texts(EMP)) == before + 1
+    await bot.press(EMP, FoodAdminCb(a="mbill_p", v="0").pack())  # employees can't
+    assert any("اجازه" in a for a in bot.alerts())

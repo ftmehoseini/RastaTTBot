@@ -129,6 +129,7 @@ async def test_inactive_items_cannot_be_ordered(services, make_user, menu) -> No
 
 
 async def test_guest_orders_and_invoice(services, make_user, menu, clock, policy) -> None:
+    services.policy.food.allow_guest_orders = True  # off in the settings; the code is kept
     user = await make_user()
     clock.set(tehran(2026, 10, 19, 8, 0))
     await services.food.place_order(user, menu["items"]["قرمه‌سبزی"].id)
@@ -227,6 +228,7 @@ async def test_save_week_follows_the_food_settings(services, make_user, menu, cl
 
 
 async def test_save_guest_week_sets_counts_cancels_and_reports(services, make_user, menu, clock, policy) -> None:
+    services.policy.food.allow_guest_orders = True  # off in the settings; the code is kept
     user = await make_user()
     items = _items(menu)
     joojeh, gheimeh = items["جوجه کباب"].id, items["قیمه"].id
@@ -251,6 +253,7 @@ async def test_save_guest_week_sets_counts_cancels_and_reports(services, make_us
 async def test_a_new_menu_without_an_ordered_dish_tells_only_those_people(
     services, make_user, menu, clock, messenger
 ) -> None:
+    services.policy.food.allow_guest_orders = True  # off in the settings; the code is kept
     from app.application.use_cases.food_broadcast import notify_lost_dishes
 
     a = await make_user("آرش")

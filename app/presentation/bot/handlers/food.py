@@ -14,7 +14,7 @@ from app.application.services.container import Services
 from app.application.use_cases.food_broadcast import OPEN_FOOD_MENU, notify_food_admins
 from app.core.exceptions import ExpiredActionError, NotFoundError
 from app.core.security.rbac import Permission
-from app.core.utils.jalali import format_date, format_date_short
+from app.core.utils.jalali import format_date, format_date_short, month_range
 from app.core.utils.text import format_money, format_number, parse_int, to_persian_digits
 from app.domain.users.models import User
 from app.presentation.bot.callbacks.data import OPEN_FOOD, FoodAdminCb, FoodCb, NavCb
@@ -484,21 +484,15 @@ async def guest_delete(query: CallbackQuery, callback_data: FoodCb, services: Se
 
 @router.callback_query(FoodCb.filter(F.a.in_({"invoice", "week"})))  # «week»: the old report's buttons
 async def my_invoice(query: CallbackQuery, callback_data: FoodCb, services: Services, user: User) -> None:
+    """This month's bill (or last month's): dishes per weekday and the total debt."""
     today = services.time.today()
-    next_week = callback_data.v == "next"
-    invoice = await services.food.invoice(user, today + timedelta(days=7) if next_week else today)
-    title = "صورت‌حساب غذای هفته‌ی بعد" if next_week else "صورت‌حساب غذای این هفته"
-    text = texts.invoice(invoice, services.policy.food, services.policy.payment, title=title)
-    guests = await services.food.repo.guest_orders_between(invoice.week_start, invoice.week_end, user.id)
-    rows = [
-        [button(f"🗑 لغو مهمان {format_date_short(g.order_date)} {g.food_name}", FoodCb(a="g_del", v=g.id.hex).pack())]
-        for g in guests
-        if services.food.is_open(g.order_date, guest=True)
-    ]
-    if next_week:
-        rows.append([button("🧾 صورت‌حساب این هفته", FoodCb(a="invoice").pack())])
-    else:
-        upcoming = await services.food.invoice(user, today + timedelta(days=7))
-        if upcoming.lines:
-            rows.append([button("🧾 صورت‌حساب هفته‌ی بعد", FoodCb(a="invoice", v="next").pack())])
-    await show(query, text, inline([*rows, _back()]))
+    previous = callback_data.v == "prev"
+    day = month_range(today)[0] - timedelta(days=1) if previous else today
+    bill = await services.food.month_bill(user, day)
+    text = texts.month_bill(bill, services.policy.food, services.policy.payment)
+    other = (
+        button("▶️ صورت‌حساب این ماه", FoodCb(a="invoice").pack())
+        if previous
+        else button("◀️ صورت‌حساب ماه قبل", FoodCb(a="invoice", v="prev").pack())
+    )
+    await show(query, text, inline([[other], _back()]))

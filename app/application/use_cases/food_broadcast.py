@@ -1,5 +1,6 @@
 """Tell every active employee that the weekly menu is ready. Resumable and idempotent per menu."""
 
+import asyncio
 from datetime import date
 from uuid import UUID
 
@@ -123,3 +124,33 @@ async def notify_food_admins(services: Services, user: User, days: list[date], l
                 await services.notifications.notify_user(admin, text, NotificationType.GENERIC)
     except Exception:
         log.warning("could not tell the food admins about an order change", exc_info=True)
+
+
+# --- the monthly bill: each person gets their own ------------------------------------------------
+
+
+async def send_month_bills(services: Services, actor_id: UUID, day: date) -> BulkResult:
+    """Send everyone who ordered in `day`'s Jalali month their own bill. Each bill once per month:
+    re-running only reaches people who didn't get it."""
+    actor = await services.users.get(actor_id)
+    if actor is None:
+        raise NotFoundError("فرستنده پیدا نشد.")
+    bills = await services.food.team_month_bills(actor, day)
+    users = await UserRepository(services.session).get_many({b.user_id for b in bills})
+    result = BulkResult()
+    batch = services.policy.notifications
+    for index, bill in enumerate(bills):
+        if index and index % batch.batch_size == 0:
+            await asyncio.sleep(batch.batch_interval_seconds)
+        user = users.get(bill.user_id)
+        if user is None or not user.is_active:
+            continue
+        outcome = await services.notifications.notify_user(
+            user,
+            texts.month_bill(bill, services.policy.food, services.policy.payment),
+            NotificationType.GENERIC,
+            dedup_key=f"month_bill:{bill.year}-{bill.month:02d}:{user.id}",
+            batch_key=f"month_bill:{bill.year}-{bill.month:02d}",
+        )
+        result = result.add(outcome)
+    return result

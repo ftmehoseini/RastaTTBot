@@ -15,7 +15,7 @@ from sqlalchemy.pool import NullPool
 
 import app.domain.models  # noqa: F401  (registers all ORM models)
 from app.application.services.container import Services
-from app.application.use_cases.food_broadcast import announce, broadcast_menu
+from app.application.use_cases.food_broadcast import announce, broadcast_menu, send_month_bills
 from app.application.use_cases.reminders import send_check_in_reminders, send_check_out_reminders
 from app.application.use_cases.workbook_report import update_workbook
 from app.core.config import get_policy, get_settings
@@ -138,6 +138,33 @@ def announce_task(actor_id: str, announcement_id: str, text: str, menu_id: str |
                 await services.notifications.notify_user(
                     actor,
                     f"📣 اطلاع‌رسانی انجام شد.\nارسال‌شده: {result.sent} | ناموفق: {result.failed}"
+                    f" | قبلاً ارسال‌شده: {result.skipped}",
+                )
+
+        asyncio.run(report())
+    return _summary(result) if result else None
+
+
+@celery_app.task(
+    name="food.send_month_bills",
+    autoretry_for=(ConnectionError, OSError),
+    retry_backoff=True,
+    max_retries=3,
+)
+def send_month_bills_task(actor_id: str, day: str) -> dict[str, Any] | None:
+    async def job(services: Services):
+        return await send_month_bills(services, UUID(actor_id), date.fromisoformat(day))
+
+    result = run_exclusive(f"food.send_month_bills:{day}", job, timeout=3600)
+    if result is not None:
+        actor_id_uuid = UUID(actor_id)
+
+        async def report() -> None:
+            async with unit_of_work() as services:
+                actor = await services.users.get(actor_id_uuid)
+                await services.notifications.notify_user(
+                    actor,
+                    f"📨 ارسال صورت‌حساب ماهانه انجام شد.\nارسال‌شده: {result.sent} | ناموفق: {result.failed}"
                     f" | قبلاً ارسال‌شده: {result.skipped}",
                 )
 

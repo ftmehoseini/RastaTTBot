@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import date
 
 from app.application.dto.attendance import EmployeeReport
-from app.application.dto.food import FoodReportRow, Invoice
+from app.application.dto.food import FoodReportRow, Invoice, MonthBill
 from app.core.utils.jalali import to_jalali, weekday_name
 from app.domain.attendance.models import DayStatus, RecordSource
 from app.infrastructure.excel.styles import (
@@ -248,4 +248,33 @@ def build_invoices_workbook(invoices: Sequence[Invoice], currency_label: str) ->
         for line in i.lines
     ]
     add_table_sheet(workbook, "ریز اقلام", line_columns, line_rows)
+    return to_bytes(workbook)
+
+
+def build_month_bills_workbook(bills: Sequence[MonthBill], currency_label: str) -> bytes:
+    """Everyone's monthly food bill: one row per person, then every dish by date."""
+    workbook = new_workbook()
+    columns = [
+        Column("نام کارمند", 22),
+        Column("تعداد غذا", 12),
+        Column(f"مجموع بدهی ({currency_label})", 18, MONEY_FORMAT),
+    ]
+    rows = [[b.full_name, b.meals, b.total] for b in bills]
+    totals = ["جمع کل", sum(b.meals for b in bills), sum(b.total for b in bills)]
+    add_table_sheet(workbook, "صورت‌حساب ماهانه", columns, rows, totals=totals, first=True)
+    line_columns = [
+        Column("نام کارمند", 22),
+        Column("تاریخ شمسی", 12),
+        Column("روز", 10),
+        Column("غذا", 24),
+        Column("تعداد", 8),
+        Column("قیمت واحد", 12, MONEY_FORMAT),
+        Column("مبلغ", 12, MONEY_FORMAT),
+    ]
+    line_rows = [
+        [b.full_name, _j(line.day), weekday_name(line.day), line.food_name, line.quantity, line.unit_price, line.total]
+        for b in bills
+        for line in b.lines
+    ]
+    add_table_sheet(workbook, "ریز غذاها", line_columns, line_rows)
     return to_bytes(workbook)

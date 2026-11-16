@@ -82,7 +82,7 @@ food:
   # Leave empty to use ordering_deadline_time for guest orders too
   guest_ordering_deadline_time: ""
   currency_label: "تومان"
-  allow_guest_orders: true
+  allow_guest_orders: false  # there are no guests; guest screens answer «فعال نیست»
   max_guest_count_per_order: 10
   max_items_per_employee_order: 1
   allow_order_edit_before_deadline: true

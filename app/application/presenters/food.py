@@ -9,10 +9,11 @@ from app.application.dto.food import (
     GuestWeekResult,
     Invoice,
     MenuImportPreview,
+    MonthBill,
     WeekOrderResult,
 )
 from app.core.config.policy import FoodPolicy, PaymentPolicy
-from app.core.utils.jalali import format_date, format_date_numeric, format_date_short, format_time
+from app.core.utils.jalali import format_date, format_date_numeric, format_date_short, format_time, month_label
 from app.core.utils.text import format_money, to_persian_digits
 from app.domain.food.models import FoodGuestOrder, FoodOrder
 from app.infrastructure.excel.menu_parser import MenuParseResult
@@ -175,6 +176,41 @@ def invoice(inv: Invoice, policy: FoodPolicy, payment: PaymentPolicy, title: str
             lines.append(f"به نام: {payment.account_holder_name}")
         if payment.payment_message:
             lines.append(payment.payment_message)
+    return "\n".join(lines)
+
+
+def _payment_lines(payment: PaymentPolicy) -> list[str]:
+    if not (payment.shaba_number or payment.payment_message):
+        return []
+    lines = ["", "💳 اطلاعات پرداخت"]
+    if payment.shaba_number:
+        lines.append(f"شماره شبا: {payment.shaba_number}")
+    if payment.account_holder_name:
+        lines.append(f"به نام: {payment.account_holder_name}")
+    if payment.payment_message:
+        lines.append(payment.payment_message)
+    return lines
+
+
+def month_bill(bill: MonthBill, policy: FoodPolicy, payment: PaymentPolicy) -> str:
+    """«شنبه: ماکارونی، مرغ، کوفته» per weekday of the month, then the total debt."""
+    lines = [
+        f"🧾 صورت‌حساب غذای {month_label(bill.year, bill.month)}",
+        bill.full_name,
+        f"از {format_date_numeric(bill.start)} تا {format_date_numeric(bill.end)}",
+        "",
+    ]
+    if not bill.lines:
+        lines.append("در این ماه سفارشی ثبت نکرده‌اید.")
+        return "\n".join(lines)
+    lines += [f"{weekday}: {'، '.join(dishes)}" for weekday, dishes in bill.by_weekday()]
+    lines += [
+        "",
+        f"🍛 تعداد غذا: {to_persian_digits(bill.meals)} پرس",
+        f"💰 مجموع بدهی: {format_money(bill.total, policy.currency_label)}",
+    ]
+    if bill.total:
+        lines += _payment_lines(payment)
     return "\n".join(lines)
 
 
