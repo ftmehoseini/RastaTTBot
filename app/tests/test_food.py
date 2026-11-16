@@ -185,3 +185,42 @@ async def test_only_menu_managers_can_import(services, make_user) -> None:
     manager = await make_user("مدیر", RoleCode.ADMIN_2_MANAGER)
     with pytest.raises(PermissionDeniedError):  # managers see reports but do not edit menus
         await services.food.import_menu(manager, parsed, "x.xlsx", None)
+
+
+# --- the whole week in one go -------------------------------------------------------------------------
+
+
+def _items(menu) -> dict[str, object]:
+    return {i.food_name: i for i in menu["menu"].items}
+
+
+async def test_save_week_sets_each_day_and_reports_what_it_could_not(services, make_user, menu, clock) -> None:
+    user = await make_user()
+    items = _items(menu)
+    clock.set(tehran(2026, 10, 19, 9, 0))
+    first = await services.food.save_week(
+        user, {date(2026, 10, 19): [items["قرمه‌سبزی"].id], date(2026, 10, 20): [items["قیمه"].id]}
+    )
+    assert [d for d, _ in first.saved] == [date(2026, 10, 19), date(2026, 10, 20)]
+    again = await services.food.save_week(user, {date(2026, 10, 19): [items["قرمه‌سبزی"].id], date(2026, 10, 20): []})
+    assert again.unchanged == [date(2026, 10, 19)] and again.cancelled == [date(2026, 10, 20)]
+    clock.set(tehran(2026, 10, 19, 10, 5))  # 27 مهر is closed now
+    late = await services.food.save_week(user, {date(2026, 10, 19): [items["جوجه کباب"].id]})
+    assert not late.changed and late.skipped and late.skipped[0][0] == date(2026, 10, 19)
+    current = await services.food.current_choices(user, [date(2026, 10, 19)])
+    assert current == {date(2026, 10, 19): [items["قرمه‌سبزی"].id]}
+
+
+async def test_save_week_follows_the_food_settings(services, make_user, menu, clock) -> None:
+    user = await make_user()
+    items = _items(menu)
+    clock.set(tehran(2026, 10, 19, 9, 0))
+    services.policy.food.max_items_per_employee_order = 2
+    both = [items["قرمه‌سبزی"].id, items["جوجه کباب"].id]
+    assert (await services.food.save_week(user, {date(2026, 10, 19): both})).saved
+    assert sorted(
+        map(str, (await services.food.current_choices(user, [date(2026, 10, 19)]))[date(2026, 10, 19)])
+    ) == sorted(map(str, both))
+    services.policy.food.allow_order_edit_before_deadline = False
+    blocked = await services.food.save_week(user, {date(2026, 10, 19): [items["قرمه‌سبزی"].id]})
+    assert not blocked.changed and "مجاز نیست" in blocked.skipped[0][1]

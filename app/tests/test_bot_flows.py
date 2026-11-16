@@ -423,7 +423,7 @@ async def test_food_order_and_admin_reports(bot: Harness, clock) -> None:
 
     await bot.text(EMP, "🍽 سفارش غذا")
     await bot.press(EMP, FoodCb(a="menu").pack())
-    assert "منوی این هفته" in bot.last_text(EMP)
+    assert "منو و سفارش هفته" in bot.last_text(EMP)
     await bot.press(EMP, FoodCb(a="today").pack())
     assert FoodCb(a="item", v=item_id.hex).pack() in bot.buttons(EMP)
     await bot.press(EMP, FoodCb(a="item", v=item_id.hex).pack())
@@ -703,5 +703,77 @@ async def test_order_button_under_the_menu_notification_opens_the_menu(bot: Harn
     await bot.press(EMP, OPEN_FOOD_MENU)
     assert not any("منقضی" in a for a in bot.alerts())
     page = bot.last_text(EMP)
-    assert "برای سفارش، روز موردنظر را انتخاب کنید" in page
-    assert any(b.startswith("fd:day:") for b in bot.buttons(EMP))  # days to order for
+    assert "منو و سفارش هفته" in page and "تومان" in page  # the weekly screen with dishes and prices
+    assert any(b.startswith("fd:w:") for b in bot.buttons(EMP))  # dishes to tick
+
+
+async def test_order_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
+    """Every open day's dishes with prices on one screen; tick several days, confirm once; one bill."""
+    from sqlalchemy import select
+
+    from app.domain.food.models import FoodOrder, OrderStatus
+
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    clock.set(tehran(2026, 10, 19, 8, 0))  # دوشنبه ۲۷ مهر, before the 10:00 deadline
+    async with bot.session_factory() as session:
+        services = bot.services(session)
+        secretary = await services.users.get_by_messenger_id(SEC)
+        parsed = parse_menu(menu_file(VALID_ROWS), date(2026, 10, 19), 100_000_000)
+        menu = (await services.food.import_menu(secretary, parsed, "menu.xlsx", None)).menu
+        items = {i.food_name: i.id for i in menu.items}
+    ghormeh, joojeh, gheimeh = items["قرمه‌سبزی"], items["جوجه کباب"], items["قیمه"]
+
+    async def orders() -> dict[date, tuple[str, list[str]]]:
+        async with bot.session_factory() as session:
+            emp = await bot.services(session).users.get_by_messenger_id(EMP)
+            rows = (await session.execute(select(FoodOrder).where(FoodOrder.user_id == emp.id))).scalars().all()
+            return {o.order_date: (o.status, [i.food_name for i in o.items]) for o in rows}
+
+    await bot.text(EMP, "🍽 سفارش غذا")
+    labels = bot.buttons(EMP)
+    assert FoodCb(a="week").pack() not in labels and FoodCb(a="invoice").pack() in labels  # bill only
+    await bot.press(EMP, FoodCb(a="menu").pack())
+    page = bot.last_text(EMP)
+    for line in ("قرمه‌سبزی — ۱۸۵٬۰۰۰ تومان", "جوجه کباب — ۲۱۰٬۰۰۰ تومان", "قیمه — ۱۷۵٬۰۰۰ تومان"):
+        assert line in page, line  # names and prices of every open day on one screen
+    assert "ماکارونی" not in page  # inactive dish
+    assert {FoodCb(a="w", v=i.hex).pack() for i in (ghormeh, joojeh, gheimeh)} <= set(bot.buttons(EMP))
+
+    await bot.press(EMP, FoodCb(a="w", v=ghormeh.hex).pack())
+    assert "✅ قرمه‌سبزی" in bot.last_text(EMP) and "۱ روز — جمع ۱۸۵٬۰۰۰" in bot.last_text(EMP)
+    await bot.press(EMP, FoodCb(a="w", v=joojeh.hex).pack())  # same day: replaces the choice
+    assert "✅ جوجه کباب" in bot.last_text(EMP) and "▫️ قرمه‌سبزی" in bot.last_text(EMP)
+    await bot.press(EMP, FoodCb(a="w", v=gheimeh.hex).pack())  # another day
+    assert "۲ روز — جمع ۳۸۵٬۰۰۰" in bot.last_text(EMP)
+    assert await orders() == {}  # nothing is saved before confirming
+
+    await bot.press(EMP, FoodCb(a="w_ok").pack())
+    saved = bot.last_text(EMP)
+    assert "سفارش هفته ثبت شد" in saved and "۳۸۵٬۰۰۰" in saved
+    assert await orders() == {
+        date(2026, 10, 19): (OrderStatus.ACTIVE, ["جوجه کباب"]),
+        date(2026, 10, 20): (OrderStatus.ACTIVE, ["قیمه"]),
+    }
+
+    # Opening it again shows what is ordered; unticking a day cancels it on confirm
+    await bot.press(EMP, FoodCb(a="menu").pack())
+    assert "✅ جوجه کباب" in bot.last_text(EMP) and "✅ قیمه" in bot.last_text(EMP)
+    await bot.press(EMP, FoodCb(a="w", v=gheimeh.hex).pack())
+    await bot.press(EMP, FoodCb(a="w_ok").pack())
+    assert "لغو شد" in bot.last_text(EMP)
+    assert (await orders())[date(2026, 10, 20)][0] == OrderStatus.CANCELLED
+
+    # A day that closes while the person is choosing is reported, not silently dropped
+    await bot.press(EMP, FoodCb(a="menu").pack())
+    await bot.press(EMP, FoodCb(a="w", v=ghormeh.hex).pack())  # 27 مهر: switch to قرمه‌سبزی
+    clock.set(tehran(2026, 10, 19, 10, 30))  # 27 مهر's deadline (10:00) passes
+    await bot.press(EMP, FoodCb(a="w_ok").pack())
+    assert "تغییر نکرد" in bot.last_text(EMP) and "مهلت" in bot.last_text(EMP)
+    assert (await orders())[date(2026, 10, 19)][1] == ["جوجه کباب"]  # unchanged
+
+    # One bill; the old report's buttons in chats open it too
+    await bot.press(EMP, FoodCb(a="invoice").pack())
+    assert "صورت‌حساب غذای این هفته" in bot.last_text(EMP) and "۲۱۰٬۰۰۰" in bot.last_text(EMP)
+    await bot.press(EMP, FoodCb(a="week").pack())
+    assert "صورت‌حساب" in bot.last_text(EMP) and not any("منقضی" in a for a in bot.alerts())

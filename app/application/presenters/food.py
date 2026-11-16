@@ -1,6 +1,9 @@
 """Persian texts for food menus, orders, invoices and admin summaries."""
 
-from app.application.dto.food import DayMenu, DaySummary, Invoice, MenuImportPreview
+from datetime import date
+from uuid import UUID
+
+from app.application.dto.food import DayMenu, DaySummary, Invoice, MenuImportPreview, WeekOrderResult
 from app.core.config.policy import FoodPolicy, PaymentPolicy
 from app.core.utils.jalali import format_date, format_date_numeric, format_date_short, format_time
 from app.core.utils.text import format_money, to_persian_digits
@@ -21,6 +24,41 @@ def week_menu(days: list[DayMenu], policy: FoodPolicy) -> str:
     lines.append(
         f"⏰ مهلت سفارش هر روز: تا ساعت {to_persian_digits(policy.ordering_deadline_time.strftime('%H:%M'))} همان روز"
     )
+    return "\n".join(lines)
+
+
+def week_order(days: list[DayMenu], chosen: dict[date, list[UUID]], policy: FoodPolicy) -> str:
+    """Every open day with its dishes and prices; ✅ marks what is chosen, with the running total."""
+    if not days:
+        return "🍽 فعلاً منویی برای سفارش باز نیست."
+    lines = ["🍽 منو و سفارش هفته", "روی غذاها بزنید تا انتخاب ✅ یا حذف شوند؛ در پایان «ثبت سفارش هفته» را بزنید."]
+    if policy.max_items_per_employee_order == 1:
+        lines.append("(هر روز یک غذا؛ انتخاب غذای دیگر همان روز جایگزین می‌شود)")
+    total, count = 0, 0
+    for day in days:
+        lines += ["", f"📅 {format_date_short(day.day)} — مهلت تا ساعت {format_time(day.deadline)}"]
+        picked = set(chosen.get(day.day, []))
+        for item in day.items:
+            mark = "✅" if item.id in picked else "▫️"
+            lines.append(f"   {mark} {item.food_name} — {format_money(item.price_toman, policy.currency_label)}")
+            if item.id in picked:
+                total += item.price_toman
+        count += bool(picked & {i.id for i in day.items})
+    lines += ["", f"🧾 انتخاب شما: {to_persian_digits(count)} روز — جمع {format_money(total, policy.currency_label)}"]
+    return "\n".join(lines)
+
+
+def week_saved(result: WeekOrderResult, total: int, policy: FoodPolicy) -> str:
+    if not result.changed and not result.skipped:
+        return "ℹ️ تغییری نداده بودید؛ سفارش‌های شما همان قبلی است."
+    lines = ["✅ سفارش هفته ثبت شد." if result.changed else "⚠️ سفارشی ثبت نشد."]
+    for day, names in result.saved:
+        lines.append(f"🍛 {format_date_short(day)}: {'، '.join(names)}")
+    for day in result.cancelled:
+        lines.append(f"🗑 {format_date_short(day)}: لغو شد")
+    for day, reason in result.skipped:
+        lines.append(f"⚠️ {format_date_short(day)}: تغییر نکرد ({reason})")
+    lines.append(f"\n💰 جمع سفارش‌های شما در این روزها: {format_money(total, policy.currency_label)}")
     return "\n".join(lines)
 
 

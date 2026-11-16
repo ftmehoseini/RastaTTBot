@@ -16,6 +16,7 @@ from app.application.dto.food import (
     InvoiceLine,
     MenuImportPreview,
     OrderResult,
+    WeekOrderResult,
 )
 from app.application.services import access
 from app.core.config.policy import Policy
@@ -164,6 +165,87 @@ class FoodService:
         self.audit.record(AuditAction.FOOD_ORDER_CANCELLED, "food_order", order.id, user.id, {"date": day.isoformat()})
         await self.session.commit()
         return order
+
+    # --- the whole week in one go ---------------------------------------------------------------
+
+    async def current_choices(self, user: User, days: list[date]) -> dict[date, list[UUID]]:
+        """The dishes the person has ordered on these days (active orders only)."""
+        if not days:
+            return {}
+        orders = await self.repo.orders_between(min(days), max(days), user.id)
+        return {o.order_date: [i.menu_item_id for i in o.items if i.menu_item_id] for o in orders if o.items}
+
+    async def save_week(self, user: User, choices: dict[date, list[UUID]]) -> WeekOrderResult:
+        """Make each listed day's order exactly the chosen dishes (none = cancel), in one transaction.
+
+        Days whose deadline has passed, or that can't be changed, are skipped and reported, so one
+        closed day never blocks the others. Every change is audited like a single order.
+        """
+        access.require(user, Permission.FOOD_ORDER)
+        result = WeekOrderResult()
+        for day in sorted(choices):
+            wanted = list(dict.fromkeys(choices[day]))  # keep order, drop duplicates
+            order = await self.repo.get_order(user.id, day, for_update=True)
+            active = order is not None and order.status == OrderStatus.ACTIVE
+            current = [i.menu_item_id for i in order.items] if active and order is not None else []
+            if sorted(map(str, wanted)) == sorted(map(str, current)):
+                result.unchanged.append(day)
+                continue
+            if not self.is_open(day):
+                result.skipped.append((day, f"مهلت تا ساعت {format_time(self.deadline(day))} بود"))
+                continue
+            if active and not self.policy.allow_order_edit_before_deadline:
+                result.skipped.append((day, "تغییر سفارش ثبت‌شده مجاز نیست"))
+                continue
+            if len(wanted) > self.policy.max_items_per_employee_order:
+                result.skipped.append((day, "تعداد غذا بیشتر از حد مجاز است"))
+                continue
+            if not wanted:
+                assert order is not None
+                order.status = OrderStatus.CANCELLED
+                order.updated_by = user.id
+                self.audit.record(
+                    AuditAction.FOOD_ORDER_CANCELLED, "food_order", order.id, user.id, {"date": day.isoformat()}
+                )
+                result.cancelled.append(day)
+                continue
+            items = []
+            for item_id in wanted:
+                item = await self._orderable_item(item_id)
+                if item.menu_date != day:
+                    raise ValidationError("انتخاب‌ها با منو جور نیست. لطفاً منو را دوباره باز کنید.")
+                items.append(item)
+            if order is None:
+                order = FoodOrder(user_id=user.id, order_date=day, status=OrderStatus.ACTIVE, created_by=user.id)
+                order.items = []
+                try:
+                    async with self.session.begin_nested():
+                        self.session.add(order)
+                except IntegrityError:
+                    order = await self.repo.get_order(user.id, day, for_update=True)
+                    if order is None:
+                        raise
+            order.status = OrderStatus.ACTIVE
+            order.items.clear()
+            await self.session.flush()
+            for item in items:
+                order.items.append(
+                    FoodOrderItem(
+                        menu_item_id=item.id, food_name=item.food_name, unit_price_toman=item.price_toman, quantity=1
+                    )
+                )
+            order.updated_by = user.id
+            await self.session.flush()
+            self.audit.record(
+                AuditAction.FOOD_ORDER_PLACED,
+                "food_order",
+                order.id,
+                user.id,
+                {"date": day.isoformat(), "items": [i.food_name for i in items], "via": "week"},
+            )
+            result.saved.append((day, [i.food_name for i in items]))
+        await self.session.commit()
+        return result
 
     # --- guest orders -----------------------------------------------------------------------
 

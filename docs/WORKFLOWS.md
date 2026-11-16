@@ -40,13 +40,15 @@ Every multi-step dialog (forgotten entry, edit) has «✖️ لغو», which end
 
 ## Food
 
-Employee sub-menu: منوی این هفته · سفارش امروز · سفارش مهمان · گزارش غذای این هفته · صورت‌حساب من · بازگشت. Users with food admin permissions also see «⚙️ مدیریت غذا».
+Employee sub-menu: منو و سفارش هفته · سفارش امروز · سفارش مهمان · صورت‌حساب من · بازگشت. Users with food admin permissions also see «⚙️ مدیریت غذا».
 
-**Order.** Choose a day (still open) → dishes with prices (✅ marks the current choice) → confirm. One meal per person per day by default: a new choice before the deadline replaces the old one, and «لغو سفارش این روز» cancels it. After `ordering_deadline_time` on the day itself, ordering, changing and cancelling are refused.
+**Week order («📋 منو و سفارش هفته»; also the button under the menu notification).** One screen lists every day of this week and next that is still open, each dish with its name and price; ✅ marks the chosen ones and the running total is shown. Tapping a dish ticks or unticks it (one meal per day by default: another dish on the same day replaces the choice). Nothing is saved until «✅ ثبت سفارش هفته»: then each listed day's order becomes exactly what is ticked, and a day that was unticked is cancelled. A day whose deadline passed while choosing is reported as not changed, with its deadline; the others are saved. «↩️ برگرداندن به سفارش‌های ثبت‌شده» goes back to what is registered.
 
-**Guest order.** Day → dish → guest count (buttons 1–10 or type a number, ≤ `max_guest_count_per_order`) → review with total → confirm. Ordering the same dish again for the same day replaces the count. Guest meals are stored, reported and billed separately from the employee's own meal. They can be cancelled from the weekly report before the deadline.
+**Today («🍛 سفارش امروز»).** Today's dishes → choose → confirm, as before. After `ordering_deadline_time` on the day itself, ordering, changing and cancelling are refused.
 
-**Invoice.** This week's lines (own and guest), totals, and the payment details from `payment.*`.
+**Guest order.** Day → dish → guest count (buttons 1–10 or type a number, ≤ `max_guest_count_per_order`) → review with total → confirm. Ordering the same dish again for the same day replaces the count. Guest meals are stored, reported and billed separately from the employee's own meal.
+
+**Bill («🧾 صورت‌حساب من»).** This week's lines (own and guest), totals, and the payment details from `payment.*`, with «🗑 لغو مهمان» for guest orders still open and «🧾 صورت‌حساب هفته‌ی بعد» when there are orders next week. (The former «📊 گزارش غذای این هفته» showed the same; its buttons in old messages open the bill.)
 
 ### Admin
 
