@@ -160,6 +160,15 @@ class FoodPolicy(BaseModel):
     allow_order_edit_before_deadline: bool = True
     max_price_toman: int = Field(default=100_000_000, gt=0)
     retain_menu_files: bool = False
+    # Ready texts the food admin can pick in «📣 اطلاع‌رسانی» (a custom text can be typed instead)
+    announcement_samples: list[str] = Field(
+        default_factory=lambda: [
+            "منو هفتگی آپلود شد، لطفاً جهت ثبت سفارش غذا اقدام نمایید.",
+            "در منو تغییراتی رخ داد، لطفاً مجدداً سفارش خود را بررسی نمایید.",
+        ]
+    )
+    # Tell food admins when someone changes an order, but only once the week's menu was announced
+    notify_food_admins_of_changes: bool = True
 
     @field_validator("ordering_deadline_time", mode="before")
     @classmethod

@@ -12,6 +12,7 @@ These were decided without asking, to keep work moving. Each one is configurable
 
 - Anyone who starts the bot can register by sending their full name and becomes an active `EMPLOYEE`. Set `users.require_admin_activation: true` to keep new users inactive until a super admin activates them. **Confirm.**
 - The first super admin is created from `BOOTSTRAP_SUPER_ADMIN_IDS` the first time that user starts the bot, or with `python -m app.cli create-super-admin`.
+- `FOOD_ADMIN` («مسئول غذا») manages only food: menus, announcements, food reports and bills. Food permissions were moved to it from `ADMIN_1_SECRETARY` and `ADMIN_2_MANAGER`.
 - `SUPER_ADMIN` has every permission. Admin roles do not imply `EMPLOYEE`; give both roles to admins who also record their own attendance (the bot assigns `EMPLOYEE` to everyone at registration).
 
 ## Attendance

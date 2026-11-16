@@ -13,6 +13,7 @@ class RoleCode(StrEnum):
     ADMIN_1_SECRETARY = "ADMIN_1_SECRETARY"
     ADMIN_2_MANAGER = "ADMIN_2_MANAGER"
     SUPER_ADMIN = "SUPER_ADMIN"
+    FOOD_ADMIN = "FOOD_ADMIN"  # manages only the food part: menus, announcements, food reports
 
 
 ROLE_TITLES_FA: dict[RoleCode, str] = {
@@ -20,6 +21,7 @@ ROLE_TITLES_FA: dict[RoleCode, str] = {
     RoleCode.ADMIN_1_SECRETARY: "ادمین ۱ (منشی)",
     RoleCode.ADMIN_2_MANAGER: "ادمین ۲ (مدیر)",
     RoleCode.SUPER_ADMIN: "مدیر کل سیستم",
+    RoleCode.FOOD_ADMIN: "مسئول غذا",
 }
 
 
@@ -44,9 +46,6 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
         {
             Permission.ATTENDANCE_REPORT_ALL,
             Permission.LEAVE_REGISTER,
-            Permission.FOOD_MENU_MANAGE,
-            Permission.FOOD_BROADCAST,
-            Permission.FOOD_REPORT_ALL,
             Permission.USERS_VIEW,
         }
     ),
@@ -54,9 +53,12 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
         {
             Permission.ATTENDANCE_REPORT_ALL,
             Permission.LEAVE_REGISTER,
-            Permission.FOOD_REPORT_ALL,
             Permission.USERS_VIEW,
         }
+    ),
+    # Food belongs to the food admin only (and the super admin, who has every permission).
+    RoleCode.FOOD_ADMIN: frozenset(
+        {Permission.FOOD_MENU_MANAGE, Permission.FOOD_BROADCAST, Permission.FOOD_REPORT_ALL}
     ),
     RoleCode.SUPER_ADMIN: frozenset(Permission),
 }

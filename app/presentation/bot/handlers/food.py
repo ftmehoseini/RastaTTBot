@@ -11,7 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from app.application.presenters import food as texts
 from app.application.services import access
 from app.application.services.container import Services
-from app.application.use_cases.food_broadcast import OPEN_FOOD_MENU
+from app.application.use_cases.food_broadcast import OPEN_FOOD_MENU, notify_food_admins
 from app.core.exceptions import ExpiredActionError, NotFoundError
 from app.core.security.rbac import Permission
 from app.core.utils.jalali import format_date, format_date_short
@@ -32,10 +32,15 @@ MENU_TEXT = "🍽 سفارش غذا\nیکی از گزینه‌ها را انتخ
 
 
 def menu_markup(user: User):
-    rows = [
-        [button("📋 منو و سفارش هفته", FoodCb(a="menu").pack()), button("🍛 سفارش امروز", FoodCb(a="today").pack())],
-        [button("👥 سفارش مهمان", FoodCb(a="guest").pack()), button("🧾 صورت‌حساب من", FoodCb(a="invoice").pack())],
-    ]
+    rows = []
+    if access.can(user, Permission.FOOD_ORDER):  # a food admin who isn't an employee only manages
+        rows += [
+            [
+                button("📋 منو و سفارش هفته", FoodCb(a="menu").pack()),
+                button("🍛 سفارش امروز", FoodCb(a="today").pack()),
+            ],
+            [button("👥 سفارش مهمان", FoodCb(a="guest").pack()), button("🧾 صورت‌حساب من", FoodCb(a="invoice").pack())],
+        ]
     if access.can(user, Permission.FOOD_MENU_MANAGE) or access.can(user, Permission.FOOD_REPORT_ALL):
         rows.append([button("⚙️ مدیریت غذا", FoodAdminCb(a="menu").pack())])
     rows.append(back_row())
@@ -44,6 +49,10 @@ def menu_markup(user: User):
 
 def _back():
     return back_row("food")
+
+
+def _day(day: date) -> str:
+    return format_date_short(day)
 
 
 @router.message(F.text == BTN_FOOD)
@@ -166,6 +175,10 @@ async def week_confirm(query: CallbackQuery, state: FSMContext, services: Servic
         days_now, chosen_now = await _week_state(state, services, user)
         choices = {d.day: chosen_now.get(d.day, []) for d in days_now}
     result = await services.food.save_week(user, choices)
+    if result.changed:
+        lines = [f"• {_day(d)}: {'، '.join(names)}" for d, names in result.saved]
+        lines += [f"• {_day(d)}: لغو شد" for d in result.cancelled]
+        await notify_food_admins(services, user, [d for d, _ in result.saved] + list(result.cancelled), lines)
     days = await services.food.week_menu() + await services.food.week_menu(services.time.today() + timedelta(days=7))
     current = await services.food.current_choices(user, list(choices))
     prices = {i.id: i.price_toman for d in days for i in d.items}
@@ -228,6 +241,11 @@ async def choose_item(query: CallbackQuery, callback_data: FoodCb, services: Ser
 @router.callback_query(FoodCb.filter(F.a == "ok"))
 async def confirm_item(query: CallbackQuery, callback_data: FoodCb, services: Services, user: User) -> None:
     result = await services.food.place_order(user, UUID(hex=callback_data.v))
+    if result.changed:
+        names = "، ".join(i.food_name for i in result.order.items)
+        await notify_food_admins(
+            services, user, [result.order.order_date], [f"• {_day(result.order.order_date)}: {names}"]
+        )
     text = texts.order_saved(result.order, services.policy.food)
     if not result.changed:
         text = "ℹ️ همین غذا قبلاً برای این روز ثبت شده بود.\n" + text
@@ -237,6 +255,7 @@ async def confirm_item(query: CallbackQuery, callback_data: FoodCb, services: Se
 @router.callback_query(FoodCb.filter(F.a == "cancel"))
 async def cancel_day(query: CallbackQuery, callback_data: FoodCb, services: Services, user: User) -> None:
     order = await services.food.cancel_order(user, date.fromordinal(int(callback_data.v)))
+    await notify_food_admins(services, user, [order.order_date], [f"• {_day(order.order_date)}: لغو شد"])
     await show(query, f"سفارش {format_date(order.order_date)} لغو شد.", inline([_back()]))
 
 
@@ -349,6 +368,12 @@ async def guest_week_confirm(query: CallbackQuery, state: FSMContext, services: 
     current = {o.menu_item_id for o in orders if o.order_date in days}
     counts = {item_id: wanted.get(item_id, 0) for item_id in {*current, *wanted}}
     result = await services.food.save_guest_week(user, counts)
+    if result.changed:
+        lines = [f"• مهمان {_day(d)}: {name} × {to_persian_digits(n)}" for d, name, n in result.saved]
+        lines += [f"• مهمان {_day(d)}: {name} لغو شد" for d, name in result.cancelled]
+        await notify_food_admins(
+            services, user, [d for d, _, _ in result.saved] + [d for d, _ in result.cancelled], lines
+        )
     total = 0
     if days:
         orders = await services.food.repo.guest_orders_between(min(days), max(days), user.id)
@@ -438,12 +463,21 @@ async def guest_count_typed(message: Message, state: FSMContext, services: Servi
 async def guest_confirm(query: CallbackQuery, callback_data: FoodCb, services: Services, user: User) -> None:
     item_hex, count = callback_data.v.split(".")
     order = await services.food.place_guest_order(user, UUID(hex=item_hex), int(count))
+    await notify_food_admins(
+        services,
+        user,
+        [order.order_date],
+        [f"• مهمان {_day(order.order_date)}: {order.food_name} × {to_persian_digits(order.guest_count)}"],
+    )
     await show(query, texts.guest_saved(order, services.policy.food), inline([_back()]))
 
 
 @router.callback_query(FoodCb.filter(F.a == "g_del"))
 async def guest_delete(query: CallbackQuery, callback_data: FoodCb, services: Services, user: User) -> None:
     order = await services.food.cancel_guest_order(user, UUID(hex=callback_data.v))
+    await notify_food_admins(
+        services, user, [order.order_date], [f"• مهمان {_day(order.order_date)}: {order.food_name} لغو شد"]
+    )
     await show(query, f"سفارش مهمان {order.food_name} برای {format_date(order.order_date)} لغو شد.", inline([_back()]))
 
 

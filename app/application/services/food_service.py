@@ -494,6 +494,7 @@ class FoodService:
         await self.session.flush()
 
         remapped = orphaned = 0
+        lost: dict[UUID, list[tuple[date, str, int]]] = defaultdict(list)
         if current is not None:
             # Keep existing orders attached to the same dish in the new version; the
             # ordered name and price are snapshots and never change.
@@ -506,6 +507,8 @@ class FoodService:
                     remapped += 1
                 else:
                     orphaned += 1
+                    if self.is_open(oi.order.order_date):
+                        lost[oi.order.user_id].append((oi.order.order_date, oi.food_name, 0))
             for g in await self.repo.guest_orders_for_menu_items(list(old_items)):
                 target = new_by_key.get((old_items[g.menu_item_id].menu_date, old_items[g.menu_item_id].food_name))
                 if target:
@@ -513,6 +516,8 @@ class FoodService:
                     remapped += 1
                 else:
                     orphaned += 1
+                    if self.is_open(g.order_date, guest=True):
+                        lost[g.user_id].append((g.order_date, g.food_name, g.guest_count))
         self.audit.record(
             AuditAction.FOOD_MENU_IMPORTED,
             "food_menu",
@@ -528,14 +533,41 @@ class FoodService:
             },
         )
         await self.session.commit()
-        return ImportResult(menu, remapped, orphaned)
+        return ImportResult(menu, remapped, orphaned, {u: sorted(v) for u, v in lost.items()})
 
     async def latest_menu(self) -> FoodMenu | None:
         return await self.repo.latest_active_menu()
 
     async def broadcast_recipients(self, actor: User) -> list[User]:
+        """Everyone active (employees, food admins and other staff)."""
         access.require(actor, Permission.FOOD_BROADCAST)
-        return await self.users.list_active_employees()
+        return await self.users.list_active()
+
+    async def record_announcement(
+        self, actor: User, announcement_id: UUID, menu_id: UUID | None, text: str, result: dict[str, int]
+    ) -> None:
+        """An «📣 اطلاع‌رسانی» was sent. It also marks the latest menu as announced, after which order
+        changes are reported to the food admins."""
+        if menu_id is not None:
+            menu = await self.repo.get(menu_id)
+            if menu is not None and menu.notified_at is None:
+                menu.notified_at = self.time.now_utc()
+        self.audit.record(
+            AuditAction.BULK_NOTIFICATION,
+            "food_announcement",
+            announcement_id,
+            actor.id,
+            {**result, "menu_id": str(menu_id) if menu_id else None, "text": text[:300]},
+        )
+        await self.session.commit()
+
+    async def announced(self, days: list[date]) -> bool:
+        """Was the menu of any of these days' weeks already announced?"""
+        for start in {week_range(d)[0] for d in days}:
+            menu = await self.repo.active_menu(start)
+            if menu is not None and menu.notified_at is not None:
+                return True
+        return False
 
     async def mark_notified(self, menu_id: UUID, actor: User, result: dict[str, int]) -> None:
         menu = await self.repo.get(menu_id)

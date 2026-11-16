@@ -52,7 +52,7 @@ class FoodCb(CallbackData, prefix="fd"):
 
 
 class FoodAdminCb(CallbackData, prefix="fa"):
-    a: str  # upload | template | confirm | discard | notify | notify_ok | summary | orders_xls | invoices
+    a: str  # upload | template | confirm | discard | notify | ann | ann_type | ann_ok | notify_ok (old) | summary | orders_xls | invoices
     v: str = ""
 
 

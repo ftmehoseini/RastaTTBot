@@ -34,7 +34,15 @@ def _perm(permission: Permission) -> Callable[[User], bool]:
 
 MENU_ENTRIES: list[MenuEntry] = [
     MenuEntry(BTN_ATTENDANCE, 10, _perm(Permission.ATTENDANCE_SELF), "attendance"),
-    MenuEntry(BTN_FOOD, 30, _perm(Permission.FOOD_ORDER), "food"),
+    MenuEntry(
+        BTN_FOOD,
+        30,
+        lambda user: any(
+            access.can(user, p)
+            for p in (Permission.FOOD_ORDER, Permission.FOOD_MENU_MANAGE, Permission.FOOD_REPORT_ALL)
+        ),
+        "food",
+    ),
     MenuEntry(BTN_ADMIN, 90, lambda user: user.is_active and is_admin(user.roles)),
 ]
 

@@ -88,6 +88,12 @@ food:
   allow_order_edit_before_deadline: true
   max_price_toman: 100000000
   retain_menu_files: false
+  # Ready texts in «📣 اطلاع‌رسانی» (the food admin can also type a custom text)
+  announcement_samples:
+    - "منو هفتگی آپلود شد، لطفاً جهت ثبت سفارش غذا اقدام نمایید."
+    - "در منو تغییراتی رخ داد، لطفاً مجدداً سفارش خود را بررسی نمایید."
+  # Message the food admins when someone changes an order after the week's menu was announced
+  notify_food_admins_of_changes: true
 
 payment:
   shaba_number: ""

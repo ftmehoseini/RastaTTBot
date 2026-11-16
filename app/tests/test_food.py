@@ -88,7 +88,7 @@ def test_template_round_trip() -> None:
 
 @pytest.fixture
 async def menu(services: Services, make_user):
-    secretary = await make_user("منشی", RoleCode.ADMIN_1_SECRETARY)
+    secretary = await make_user("منشی", RoleCode.FOOD_ADMIN)
     parsed = parse_menu(menu_file(VALID_ROWS), TODAY, 100_000_000)
     result = await services.food.import_menu(secretary, parsed, "menu.xlsx", None)
     return {"secretary": secretary, "menu": result.menu, "items": {i.food_name: i for i in result.menu.items}}
@@ -246,3 +246,29 @@ async def test_save_guest_week_sets_counts_cancels_and_reports(services, make_us
     result = await services.food.save_guest_week(user, {joojeh: 1, gheimeh: 4})
     assert result.skipped[0][:2] == (date(2026, 10, 19), "جوجه کباب") and result.saved[0][1:] == ("قیمه", 4)
     assert await services.food.current_guest_counts(user, days) == {joojeh: 3, gheimeh: 4}
+
+
+async def test_a_new_menu_without_an_ordered_dish_tells_only_those_people(
+    services, make_user, menu, clock, messenger
+) -> None:
+    from app.application.use_cases.food_broadcast import notify_lost_dishes
+
+    a = await make_user("آرش")
+    b = await make_user("بهار")
+    items = _items(menu)
+    clock.set(tehran(2026, 10, 19, 8, 0))
+    await services.food.place_order(a, items["قیمه"].id)
+    await services.food.place_guest_order(a, items["قیمه"].id, 2)
+    await services.food.place_order(b, items["جوجه کباب"].id)
+
+    rows = [r for r in VALID_ROWS if r[2] != "قیمه"] + [["1405/07/28", "سه شنبه", "کوبیده", 190000, 1]]
+    parsed = parse_menu(menu_file(rows), TODAY, 100_000_000)
+    result = await services.food.import_menu(menu["secretary"], parsed, "menu2.xlsx", None)
+    assert set(result.lost) == {a.id}  # بهار's dish is still on the menu
+    assert result.lost[a.id] == [(date(2026, 10, 20), "قیمه", 0), (date(2026, 10, 20), "قیمه", 2)]
+
+    assert await notify_lost_dishes(services, result.menu.id, result.lost) == 1
+    text = messenger.texts_to(a.chat_id)[-1]
+    assert "در منوی جدید نیست" in text and "قیمه (سفارش شما)" in text and "قیمه (مهمان × ۲)" in text
+    assert not messenger.texts_to(b.chat_id)
+    assert await notify_lost_dishes(services, result.menu.id, result.lost) == 0  # never twice

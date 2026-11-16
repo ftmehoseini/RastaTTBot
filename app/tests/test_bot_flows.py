@@ -412,7 +412,7 @@ async def test_edit_a_registered_check_in(bot: Harness, clock) -> None:
 
 async def test_food_order_and_admin_reports(bot: Harness, clock) -> None:
     await bot.register(EMP, "مریم کریمی")
-    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    await bot.register(SEC, "سارا منشی", RoleCode.FOOD_ADMIN)
     clock.set(tehran(2026, 10, 19, 8, 0))
     async with bot.session_factory() as session:
         services = bot.services(session)
@@ -699,7 +699,7 @@ async def test_order_button_under_the_menu_notification_opens_the_menu(bot: Harn
     from app.application.use_cases.food_broadcast import OPEN_FOOD_MENU, broadcast_menu
 
     await bot.register(EMP, "مریم کریمی")
-    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    await bot.register(SEC, "سارا منشی", RoleCode.FOOD_ADMIN)
     clock.set(tehran(2026, 10, 19, 8, 0))
     async with bot.session_factory() as session:
         services = bot.services(session)
@@ -725,7 +725,7 @@ async def test_order_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
     from app.domain.food.models import FoodOrder, OrderStatus
 
     await bot.register(EMP, "مریم کریمی")
-    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    await bot.register(SEC, "سارا منشی", RoleCode.FOOD_ADMIN)
     clock.set(tehran(2026, 10, 19, 8, 0))  # دوشنبه ۲۷ مهر, before the 10:00 deadline
     async with bot.session_factory() as session:
         services = bot.services(session)
@@ -809,7 +809,7 @@ async def test_guest_orders_for_the_whole_week_on_one_screen(bot: Harness, clock
     from app.domain.food.models import FoodGuestOrder, OrderStatus
 
     await bot.register(EMP, "مریم کریمی")
-    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    await bot.register(SEC, "سارا منشی", RoleCode.FOOD_ADMIN)
     clock.set(tehran(2026, 10, 19, 8, 0))
     async with bot.session_factory() as session:
         services = bot.services(session)
@@ -868,3 +868,78 @@ async def test_guest_orders_for_the_whole_week_on_one_screen(bot: Harness, clock
     saved = bot.last_text(EMP)
     assert "جوجه کباب تغییر نکرد (مهلت تا ساعت ۱۰:۰۰ بود)" in saved and "قیمه × ۱" in saved
     assert await guests() == {"جوجه کباب": 10, "قیمه": 1}
+
+
+async def test_food_admin_announces_and_hears_about_order_changes(bot: Harness, clock, monkeypatch) -> None:
+    """«📣 اطلاع‌رسانی» with a ready or typed text to everyone; after it, order changes reach the food admin."""
+    from app.infrastructure.tasks.celery_app import celery_app
+    from app.presentation.bot.callbacks.data import FoodAdminCb
+
+    def no_broker(*args, **kwargs):
+        raise ConnectionError("no broker in tests")
+
+    monkeypatch.setattr(celery_app, "send_task", no_broker)  # sends inline, as without Celery
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(SEC, "سارا منشی", RoleCode.FOOD_ADMIN)
+    await bot.register(MGR, "مدیر", RoleCode.ADMIN_2_MANAGER)
+    clock.set(tehran(2026, 10, 19, 8, 0))
+    async with bot.session_factory() as session:
+        services = bot.services(session)
+        food_admin = await services.users.get_by_messenger_id(SEC)
+        parsed = parse_menu(menu_file(VALID_ROWS), date(2026, 10, 19), 100_000_000)
+        menu = (await services.food.import_menu(food_admin, parsed, "menu.xlsx", None)).menu
+        items = {i.food_name: i.id for i in menu.items}
+
+    # The manager no longer manages food; the food admin does.
+    await bot.text(MGR, "🍽 سفارش غذا")
+    assert FoodAdminCb(a="menu").pack() not in bot.buttons(MGR)
+    await bot.text(SEC, "🍽 سفارش غذا")
+    assert FoodAdminCb(a="menu").pack() in bot.buttons(SEC)
+
+    # Before any announcement, changing an order doesn't message the food admin.
+    before = len(bot.texts(SEC))
+    await bot.press(EMP, FoodCb(a="menu").pack())
+    await bot.press(EMP, FoodCb(a="w", v=items["قرمه‌سبزی"].hex).pack())
+    await bot.press(EMP, FoodCb(a="w_ok").pack())
+    assert len(bot.texts(SEC)) == before
+
+    # A ready text: preview with the number of recipients, then everyone active gets it with the button.
+    await bot.press(SEC, FoodAdminCb(a="notify").pack())
+    assert "متن‌های آماده" in bot.last_text(SEC)
+    await bot.press(SEC, FoodAdminCb(a="ann", v="0").pack())
+    preview = bot.last_text(SEC)
+    assert "منو هفتگی آپلود شد" in preview and "گیرندگان: ۳ نفر" in preview
+    assert not any("منو هفتگی آپلود شد" in t for t in bot.texts(EMP))  # nothing sent before confirming
+    ok = next(b for b in bot.buttons(SEC) if b.startswith("fa:ann_ok:"))
+    await bot.press(SEC, ok)
+    for uid in (EMP, SEC, MGR):
+        assert any(t.startswith("📣 منو هفتگی آپلود شد") for t in bot.texts(uid)), uid
+    assert "food:menu" in bot.buttons(EMP)
+    await bot.press(SEC, ok)  # the same preview again: expired, nothing sent twice
+    assert sum(t.startswith("📣 منو هفتگی") for t in bot.texts(EMP)) == 1
+
+    # A typed text.
+    await bot.press(SEC, FoodAdminCb(a="notify").pack())
+    await bot.press(SEC, FoodAdminCb(a="ann_type").pack())
+    await bot.text(SEC, "ناهار امروز ساعت ۱۳ سرو می‌شود")
+    assert "ناهار امروز ساعت ۱۳" in bot.last_text(SEC)
+    await bot.press(SEC, next(b for b in bot.buttons(SEC) if b.startswith("fa:ann_ok:")))
+    assert any(t == "📣 ناهار امروز ساعت ۱۳ سرو می‌شود" for t in bot.texts(EMP))
+
+    # After the announcement every confirmed change reaches the food admin (one message per confirm).
+    before = len(bot.texts(SEC))
+    await bot.press(EMP, FoodCb(a="menu").pack())
+    await bot.press(EMP, FoodCb(a="w", v=items["جوجه کباب"].hex).pack())
+    await bot.press(EMP, FoodCb(a="w", v=items["قیمه"].hex).pack())
+    await bot.press(EMP, FoodCb(a="w_ok").pack())
+    notices = bot.texts(SEC)[before:]
+    assert len(notices) == 1
+    assert "مریم کریمی سفارش غذا را تغییر داد" in notices[0]
+    assert "دوشنبه ۲۷/۷: جوجه کباب" in notices[0] and "سه‌شنبه ۲۸/۷: قیمه" in notices[0]
+    await bot.press(EMP, FoodCb(a="guest").pack())
+    await bot.press(EMP, FoodCb(a="gp", v=items["قیمه"].hex).pack())
+    await bot.press(EMP, FoodCb(a="g_wok").pack())
+    assert "مهمان سه‌شنبه ۲۸/۷: قیمه × ۱" in bot.texts(SEC)[-1]
+    await bot.press(EMP, FoodCb(a="cancel", v=str(date(2026, 10, 19).toordinal())).pack())
+    assert "دوشنبه ۲۷/۷: لغو شد" in bot.texts(SEC)[-1]
+    assert not any("تغییر داد" in t for t in bot.texts(MGR))  # only food admins

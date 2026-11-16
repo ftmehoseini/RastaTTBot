@@ -29,6 +29,8 @@ class ImportResult:
     menu: FoodMenu
     remapped_orders: int
     orphaned_orders: int
+    # Orders whose dish is no longer on the new menu, on days still open: user → [(day, dish, guests or 0)]
+    lost: dict[UUID, list[tuple[date, str, int]]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

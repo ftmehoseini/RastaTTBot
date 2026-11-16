@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from app.application.presenters import food as texts
 from app.application.services import access
 from app.application.services.container import Services
-from app.application.use_cases.food_broadcast import broadcast_menu
+from app.application.use_cases.food_broadcast import announce, announcement_message, broadcast_menu, notify_lost_dishes
 from app.core.config.settings import get_settings
 from app.core.exceptions import ExpiredActionError, PermissionDeniedError, ValidationError
 from app.core.logging import get_logger
@@ -29,7 +29,7 @@ from app.presentation.bot.callbacks.data import FoodAdminCb
 from app.presentation.bot.handlers.common import query_message, send_file, show
 from app.presentation.bot.keyboards.common import back_row, button, cancel_row, confirm_rows, inline
 from app.presentation.bot.middlewares.filters import IsRegistered
-from app.presentation.bot.states.flows import MenuUpload
+from app.presentation.bot.states.flows import FoodAnnounce, MenuUpload
 
 log = get_logger(__name__)
 
@@ -48,7 +48,7 @@ def admin_markup(user: User):
         )
         rows.append([button("📄 دریافت قالب اکسل منو", FoodAdminCb(a="template").pack())])
     if access.can(user, Permission.FOOD_BROADCAST):
-        rows.append([button("📣 اطلاع‌رسانی ثبت غذا", FoodAdminCb(a="notify").pack())])
+        rows.append([button("📣 اطلاع‌رسانی", FoodAdminCb(a="notify").pack())])
     if access.can(user, Permission.FOOD_REPORT_ALL):
         rows.append(
             [
@@ -182,10 +182,15 @@ async def upload_confirm(query: CallbackQuery, state: FSMContext, services: Serv
             f"سفارش‌های منتقل‌شده به منوی جدید: {to_persian_digits(result.remapped_orders)} | "
             f"سفارش‌های غذای حذف‌شده (معتبر با قیمت قبلی): {to_persian_digits(result.orphaned_orders)}"
         )
+    if result.lost:
+        told = await notify_lost_dishes(services, menu.id, result.lost)
+        lines.append(
+            f"📩 {to_persian_digits(told)} نفر که غذای سفارش‌شان از منو حذف شد، پیام گرفتند تا دوباره انتخاب کنند."
+        )
     markup = None
     if access.can(user, Permission.FOOD_BROADCAST):
-        lines.append("\nبرای اطلاع کارکنان، «اطلاع‌رسانی ثبت غذا» را بزنید.")
-        markup = inline([[button("📣 اطلاع‌رسانی ثبت غذا", FoodAdminCb(a="notify").pack())], back_row("food")])
+        lines.append("\nبرای اطلاع همه، «📣 اطلاع‌رسانی» را بزنید.")
+        markup = inline([[button("📣 اطلاع‌رسانی", FoodAdminCb(a="notify").pack())], back_row("food")])
     await show(query, "\n".join(lines), markup)
 
 
@@ -197,25 +202,96 @@ async def upload_confirm_stale(query: CallbackQuery) -> None:
 # --- broadcast -----------------------------------------------------------------------------------------
 
 
+ANNOUNCE_MAX_LENGTH = 1000
+
+
 @router.callback_query(FoodAdminCb.filter(F.a == "notify"))
-async def notify_preview(query: CallbackQuery, services: Services, user: User) -> None:
+async def announce_start(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    """«📣 اطلاع‌رسانی»: pick a ready text or type one."""
+    access.require(user, Permission.FOOD_BROADCAST)
+    await state.clear()
+    samples = services.policy.food.announcement_samples
+    rows = [[button(f"📝 {text}", FoodAdminCb(a="ann", v=str(i)).pack())] for i, text in enumerate(samples)]
+    rows.append([button("✍️ متن دلخواه", FoodAdminCb(a="ann_type").pack())])
+    rows.append(back_row("food"))
+    await show(query, "📣 اطلاع‌رسانی\nیکی از متن‌های آماده را انتخاب کنید یا متن دلخواه بنویسید:", inline(rows))
+
+
+@router.callback_query(FoodAdminCb.filter(F.a == "ann_type"))
+async def announce_type(query: CallbackQuery, state: FSMContext, user: User) -> None:
+    access.require(user, Permission.FOOD_BROADCAST)
+    await state.set_state(FoodAnnounce.typing)
+    await show(query, "✍️ متن اطلاع‌رسانی را بنویسید و بفرستید:", inline([cancel_row()]))
+
+
+async def _announce_preview(state: FSMContext, services: Services, user: User, text: str) -> tuple[str, object]:
+    text = text.strip()
+    if not text:
+        raise ValidationError("متن خالی است.")
+    if len(text) > ANNOUNCE_MAX_LENGTH:
+        raise ValidationError(f"متن حداکثر {to_persian_digits(ANNOUNCE_MAX_LENGTH)} حرف می‌تواند باشد.")
     recipients = await services.food.broadcast_recipients(user)
+    announcement_id = uuid.uuid4()
+    await state.set_state(FoodAnnounce.confirming)
+    await state.update_data(ann_text=text, ann_id=announcement_id.hex)
+    preview = (
+        "📣 پیش‌نمایش اطلاع‌رسانی:\n\n"
+        f"{announcement_message(text)}\n\n"
+        f"گیرندگان: {to_persian_digits(len(recipients))} نفر (همه‌ی کاربران فعال)\nارسال شود؟"
+    )
+    return preview, inline(confirm_rows(FoodAdminCb(a="ann_ok", v=announcement_id.hex).pack()))
+
+
+@router.callback_query(FoodAdminCb.filter(F.a == "ann"))
+async def announce_sample(
+    query: CallbackQuery, callback_data: FoodAdminCb, state: FSMContext, services: Services, user: User
+) -> None:
+    access.require(user, Permission.FOOD_BROADCAST)
+    samples = services.policy.food.announcement_samples
+    index = int(callback_data.v) if callback_data.v.isdigit() else -1
+    if not 0 <= index < len(samples):
+        raise ExpiredActionError()
+    text, markup = await _announce_preview(state, services, user, samples[index])
+    await show(query, text, markup)  # type: ignore[arg-type]
+
+
+@router.message(StateFilter(FoodAnnounce.typing), F.text)
+async def announce_typed(message: Message, state: FSMContext, services: Services, user: User) -> None:
+    access.require(user, Permission.FOOD_BROADCAST)
+    text, markup = await _announce_preview(state, services, user, message.text or "")
+    await message.answer(text, reply_markup=markup)  # type: ignore[arg-type]
+
+
+@router.callback_query(FoodAdminCb.filter(F.a == "ann_ok"))
+async def announce_send(
+    query: CallbackQuery, callback_data: FoodAdminCb, state: FSMContext, services: Services, user: User
+) -> None:
+    access.require(user, Permission.FOOD_BROADCAST)
+    data = await state.get_data()
+    if data.get("ann_id") != callback_data.v or not data.get("ann_text"):
+        raise ExpiredActionError("این پیش‌نمایش منقضی شده است. «📣 اطلاع‌رسانی» را دوباره باز کنید.")
+    await state.clear()
+    text, announcement_id = data["ann_text"], UUID(hex=data["ann_id"])
     menu = await services.food.latest_menu()
-    if menu is None:
-        await show(query, "هنوز منویی ثبت نشده است.", inline([back_row("food")]))
-        return
-    already = (
-        "\n⚠️ برای این نسخه قبلاً اطلاع‌رسانی شده؛ فقط به افرادی که پیام نگرفته‌اند ارسال می‌شود."
-        if menu.notified_at
-        else ""
-    )
-    text = (
-        f"📣 اطلاع‌رسانی منوی هفته‌ی {format_date_numeric(menu.week_start_date)}\n"
-        f"تعداد گیرندگان: {to_persian_digits(len(recipients))} نفر{already}\n\nارسال شود؟"
-    )
-    await show(query, text, inline(confirm_rows(FoodAdminCb(a="notify_ok", v=menu.id.hex).pack())))
+    menu_id = menu.id if menu else None
+    try:
+        from app.infrastructure.tasks.celery_app import celery_app
+
+        celery_app.send_task(
+            "food.announce", args=[str(user.id), str(announcement_id), text, str(menu_id) if menu_id else None]
+        )
+        await show(query, "📣 ارسال پیام‌ها آغاز شد و در پس‌زمینه انجام می‌شود. نتیجه برای شما ارسال می‌شود.")
+    except Exception:
+        log.warning("celery unavailable, announcing inline", exc_info=True)
+        await show(query, "📣 در حال ارسال پیام‌ها…")
+        result = await announce(services, user.id, announcement_id, text, menu_id)
+        await query_message(query).answer(
+            f"✅ ارسال شد: {to_persian_digits(result.sent)} | ناموفق: {to_persian_digits(result.failed)}"
+            f" | قبلاً ارسال‌شده: {to_persian_digits(result.skipped)}"
+        )
 
 
+# The previous fixed «اطلاع‌رسانی ثبت غذا» confirmation; kept so its buttons in older messages still work.
 @router.callback_query(FoodAdminCb.filter(F.a == "notify_ok"))
 async def notify_send(query: CallbackQuery, callback_data: FoodAdminCb, services: Services, user: User) -> None:
     access.require(user, Permission.FOOD_BROADCAST)

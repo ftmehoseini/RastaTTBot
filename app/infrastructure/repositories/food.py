@@ -2,6 +2,7 @@ from datetime import date
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app.domain.food.models import (
     FoodGuestOrder,
@@ -83,6 +84,7 @@ class FoodRepository(Repository[FoodMenu]):
             select(FoodOrderItem)
             .join(FoodOrder, FoodOrder.id == FoodOrderItem.order_id)
             .where(FoodOrderItem.menu_item_id.in_(item_ids), FoodOrder.status == OrderStatus.ACTIVE)
+            .options(selectinload(FoodOrderItem.order))
         )
         return list((await self.session.execute(stmt)).scalars())
 

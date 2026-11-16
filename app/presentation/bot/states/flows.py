@@ -28,6 +28,11 @@ class GuestFlow(StatesGroup):
     typing_count = State()
 
 
+class FoodAnnounce(StatesGroup):
+    typing = State()  # a custom announcement text
+    confirming = State()
+
+
 class MenuUpload(StatesGroup):
     waiting_file = State()
     confirming = State()

@@ -54,7 +54,13 @@ Employee sub-menu: منو و سفارش هفته · سفارش امروز · س�
 
 «📤 آپلود/به‌روزرسانی منوی هفته» → send the `.xlsx` → validation errors (with row numbers) or a preview listing each day's dishes. The preview also warns about replacing an existing version, orders on removed dishes and price changes → confirm → a new menu version. «📄 دریافت قالب اکسل منو» sends a ready template for next week.
 
-«📣 اطلاع‌رسانی ثبت غذا» → recipient count → confirm → sent in the background in rate-limited batches with a «🍽 ثبت سفارش غذا» button. Re-sending the same menu version only reaches people who did not get it. The admin receives a delivery summary.
+Only the food admin role «مسئول غذا» (`FOOD_ADMIN`: `food.menu_manage`, `food.broadcast`, `food.report_all`) and the super admin manage food; the secretary and the manager don't. A food admin doesn't see «پنل ادمین». Without the `EMPLOYEE` role the food menu shows only «⚙️ مدیریت غذا». Assign it from the user's card in پنل ادمین.
+
+When a new menu version drops a dish someone had ordered (own or guest, on a day still open), only those people get a message listing the dish and day, with a «🍽 ثبت سفارش غذا» button. The upload result says how many were told. The old order itself is left as it was.
+
+«📣 اطلاع‌رسانی» → pick a ready text (`food.announcement_samples`: «منو هفتگی آپلود شد…», «در منو تغییراتی رخ داد…») or «✍️ متن دلخواه» and type one (≤ 1000 characters) → preview with the recipient count (every active user) → confirm → sent in the background in rate-limited batches, each with a «🍽 ثبت سفارش غذا» button. Each announcement is sent once; pressing the same confirmation again is refused. The admin receives a delivery summary. Sending an announcement marks the latest menu as announced.
+
+Once the week's menu has been announced (`food.notify_food_admins_of_changes`), every food admin gets one message per confirmed change: the weekly screen, today's order, cancelling, guest orders and cancelling a guest order, e.g. «🍽 مریم کریمی سفارش غذا را تغییر داد: • دوشنبه ۲۷/۷: جوجه کباب». Before the announcement nothing is sent, so the first wave of orders doesn't flood them. A failure to send never affects the order.
 
 Reports: «📊 گزارش این هفته / هفته بعد» (per day: portions per dish, guests, total) · «📥 فایل سفارش‌ها» (detailed Excel for this week and next) · «🧾 صورت‌حساب‌ها» (per-employee weekly invoice Excel, which also refreshes `food_weekly_summaries`).
 

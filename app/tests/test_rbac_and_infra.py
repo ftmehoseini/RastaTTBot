@@ -29,8 +29,14 @@ def test_role_permission_matrix() -> None:
     assert not has_permission([RoleCode.ADMIN_1_SECRETARY], Permission.USERS_MANAGE_ROLES)
     assert permissions_for([RoleCode.SUPER_ADMIN]) == frozenset(Permission)
     # Multiple roles combine.
-    combined = permissions_for([RoleCode.EMPLOYEE, RoleCode.ADMIN_1_SECRETARY])
+    combined = permissions_for([RoleCode.EMPLOYEE, RoleCode.FOOD_ADMIN])
     assert Permission.FOOD_ORDER in combined and Permission.FOOD_BROADCAST in combined
+    # Food is managed by the food admin only; the food admin sees nothing else.
+    food = {Permission.FOOD_MENU_MANAGE, Permission.FOOD_BROADCAST, Permission.FOOD_REPORT_ALL}
+    for role in (RoleCode.ADMIN_1_SECRETARY, RoleCode.ADMIN_2_MANAGER, RoleCode.EMPLOYEE):
+        assert not food & permissions_for([role]), role
+    assert permissions_for([RoleCode.FOOD_ADMIN]) == food
+    assert not is_admin([RoleCode.FOOD_ADMIN])  # no «پنل ادمین»
     assert is_admin([RoleCode.EMPLOYEE, RoleCode.ADMIN_2_MANAGER]) and not is_admin([RoleCode.EMPLOYEE])
 
 
@@ -89,7 +95,7 @@ async def test_require_activation_policy(services, policy) -> None:
 
 
 async def test_notification_dedup_and_bulk_resume(services, make_user, messenger, clock) -> None:
-    secretary = await make_user("منشی", RoleCode.ADMIN_1_SECRETARY)
+    secretary = await make_user("منشی", RoleCode.FOOD_ADMIN)
     a = await make_user("آرش")
     b = await make_user("بهار")
     clock.set(tehran(2026, 10, 18, 8, 0))
