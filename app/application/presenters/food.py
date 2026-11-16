@@ -28,22 +28,19 @@ def week_menu(days: list[DayMenu], policy: FoodPolicy) -> str:
 
 
 def week_order(days: list[DayMenu], chosen: dict[date, list[UUID]], policy: FoodPolicy) -> str:
-    """Every open day with its dishes and prices; ✅ marks what is chosen, with the running total."""
+    """Instructions, the deadline and the running total; the dishes and prices are the buttons below."""
     if not days:
         return "🍽 فعلاً منویی برای سفارش باز نیست."
     lines = ["🍽 منو و سفارش هفته", "روی غذاها بزنید تا انتخاب ✅ یا حذف شوند؛ در پایان «ثبت سفارش هفته» را بزنید."]
     if policy.max_items_per_employee_order == 1:
         lines.append("(هر روز یک غذا؛ انتخاب غذای دیگر همان روز جایگزین می‌شود)")
-    total, count = 0, 0
-    for day in days:
-        lines += ["", f"📅 {format_date_short(day.day)} — مهلت تا ساعت {format_time(day.deadline)}"]
-        picked = set(chosen.get(day.day, []))
-        for item in day.items:
-            mark = "✅" if item.id in picked else "▫️"
-            lines.append(f"   {mark} {item.food_name} — {format_money(item.price_toman, policy.currency_label)}")
-            if item.id in picked:
-                total += item.price_toman
-        count += bool(picked & {i.id for i in day.items})
+    lines.append(
+        f"⏰ مهلت سفارش هر روز: تا ساعت {to_persian_digits(policy.ordering_deadline_time.strftime('%H:%M'))} همان روز"
+    )
+    prices = {item.id: item.price_toman for day in days for item in day.items}
+    picked = [item_id for day in days for item_id in chosen.get(day.day, []) if item_id in prices]
+    count = sum(1 for day in days if any(i in prices for i in chosen.get(day.day, [])))
+    total = sum(prices[i] for i in picked)
     lines += ["", f"🧾 انتخاب شما: {to_persian_digits(count)} روز — جمع {format_money(total, policy.currency_label)}"]
     return "\n".join(lines)
 

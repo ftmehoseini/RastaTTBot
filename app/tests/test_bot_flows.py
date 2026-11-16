@@ -571,6 +571,15 @@ def attendance_only(monkeypatch):
     get_settings.cache_clear()
 
 
+def button_labels(harness: Harness, chat_id: int) -> list[str]:
+    """The inline button texts on the last message to chat_id."""
+    for call in reversed(harness.recorder.calls):
+        rows = getattr(getattr(call, "reply_markup", None), "inline_keyboard", None)
+        if rows and int(call.chat_id) == chat_id:
+            return [b.text for row in rows for b in row]
+    return []
+
+
 def _reply_keyboard(harness: Harness, chat_id: int) -> list[str]:
     for call in reversed(harness.recorder.calls):
         keyboard = getattr(getattr(call, "reply_markup", None), "keyboard", None)
@@ -703,7 +712,8 @@ async def test_order_button_under_the_menu_notification_opens_the_menu(bot: Harn
     await bot.press(EMP, OPEN_FOOD_MENU)
     assert not any("منقضی" in a for a in bot.alerts())
     page = bot.last_text(EMP)
-    assert "منو و سفارش هفته" in page and "تومان" in page  # the weekly screen with dishes and prices
+    assert "منو و سفارش هفته" in page and "مهلت سفارش هر روز" in page  # the weekly screen
+    assert any("تومان" not in b and "·" in b for b in button_labels(bot, EMP))  # dishes with prices
     assert any(b.startswith("fd:w:") for b in bot.buttons(EMP))  # dishes to tick
 
 
@@ -735,15 +745,25 @@ async def test_order_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
     assert FoodCb(a="week").pack() not in labels and FoodCb(a="invoice").pack() in labels  # bill only
     await bot.press(EMP, FoodCb(a="menu").pack())
     page = bot.last_text(EMP)
-    for line in ("قرمه‌سبزی — ۱۸۵٬۰۰۰ تومان", "جوجه کباب — ۲۱۰٬۰۰۰ تومان", "قیمه — ۱۷۵٬۰۰۰ تومان"):
-        assert line in page, line  # names and prices of every open day on one screen
-    assert "ماکارونی" not in page  # inactive dish
+    assert "مهلت سفارش هر روز: تا ساعت ۱۰:۰۰" in page
+    assert "قرمه‌سبزی" not in page  # the message doesn't repeat the dishes: they are the buttons
+    labels = button_labels(bot, EMP)
+    for label in (
+        "دوشنبه ۲۷/۷ · قرمه‌سبزی · ۱۸۵٬۰۰۰",
+        "دوشنبه ۲۷/۷ · جوجه کباب · ۲۱۰٬۰۰۰",
+        "سه‌شنبه ۲۸/۷ · قیمه · ۱۷۵٬۰۰۰",
+    ):
+        assert any(label in b for b in labels), label  # every open day's dishes with prices
+    assert not any("ماکارونی" in b for b in labels)  # inactive dish
     assert {FoodCb(a="w", v=i.hex).pack() for i in (ghormeh, joojeh, gheimeh)} <= set(bot.buttons(EMP))
 
     await bot.press(EMP, FoodCb(a="w", v=ghormeh.hex).pack())
-    assert "✅ قرمه‌سبزی" in bot.last_text(EMP) and "۱ روز — جمع ۱۸۵٬۰۰۰" in bot.last_text(EMP)
+    assert any(b.startswith("✅") and "قرمه‌سبزی" in b for b in button_labels(bot, EMP))
+    assert "۱ روز — جمع ۱۸۵٬۰۰۰" in bot.last_text(EMP)
     await bot.press(EMP, FoodCb(a="w", v=joojeh.hex).pack())  # same day: replaces the choice
-    assert "✅ جوجه کباب" in bot.last_text(EMP) and "▫️ قرمه‌سبزی" in bot.last_text(EMP)
+    labels = button_labels(bot, EMP)
+    assert any(b.startswith("✅") and "جوجه کباب" in b for b in labels)
+    assert any(b.startswith("▫️") and "قرمه‌سبزی" in b for b in labels)
     await bot.press(EMP, FoodCb(a="w", v=gheimeh.hex).pack())  # another day
     assert "۲ روز — جمع ۳۸۵٬۰۰۰" in bot.last_text(EMP)
     assert await orders() == {}  # nothing is saved before confirming
@@ -758,7 +778,9 @@ async def test_order_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
 
     # Opening it again shows what is ordered; unticking a day cancels it on confirm
     await bot.press(EMP, FoodCb(a="menu").pack())
-    assert "✅ جوجه کباب" in bot.last_text(EMP) and "✅ قیمه" in bot.last_text(EMP)
+    labels = button_labels(bot, EMP)
+    assert any(b.startswith("✅") and "جوجه کباب" in b for b in labels)
+    assert any(b.startswith("✅") and "قیمه" in b for b in labels)
     await bot.press(EMP, FoodCb(a="w", v=gheimeh.hex).pack())
     await bot.press(EMP, FoodCb(a="w_ok").pack())
     assert "لغو شد" in bot.last_text(EMP)
