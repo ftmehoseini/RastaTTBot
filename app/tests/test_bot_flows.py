@@ -744,6 +744,7 @@ async def test_order_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
     await bot.text(EMP, "🍽 سفارش غذا")
     labels = bot.buttons(EMP)
     assert FoodCb(a="week").pack() not in labels and FoodCb(a="invoice").pack() in labels  # bill only
+    assert FoodCb(a="today").pack() not in labels and FoodCb(a="guest").pack() not in labels  # removed
     await bot.press(EMP, FoodCb(a="menu").pack())
     page = bot.last_text(EMP)
     assert "مهلت سفارش هر روز: تا ساعت ۱۰:۰۰" in page

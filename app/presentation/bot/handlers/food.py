@@ -34,13 +34,12 @@ MENU_TEXT = "🍽 سفارش غذا\nیکی از گزینه‌ها را انتخ
 def menu_markup(user: User):
     rows = []
     if access.can(user, Permission.FOOD_ORDER):  # a food admin who isn't an employee only manages
-        rows += [
+        rows.append(
             [
                 button("📋 منو و سفارش هفته", FoodCb(a="menu").pack()),
-                button("🍛 سفارش امروز", FoodCb(a="today").pack()),
-            ],
-            [button("👥 سفارش مهمان", FoodCb(a="guest").pack()), button("🧾 صورت‌حساب من", FoodCb(a="invoice").pack())],
-        ]
+                button("🧾 صورت‌حساب من", FoodCb(a="invoice").pack()),
+            ]
+        )
     if access.can(user, Permission.FOOD_MENU_MANAGE) or access.can(user, Permission.FOOD_REPORT_ALL):
         rows.append([button("⚙️ مدیریت غذا", FoodAdminCb(a="menu").pack())])
     rows.append(back_row())
@@ -382,7 +381,6 @@ async def guest_week_confirm(query: CallbackQuery, state: FSMContext, services: 
     markup = inline(
         [
             [button("🧾 صورت‌حساب من", FoodCb(a="invoice").pack())],
-            [button("👥 سفارش مهمان", FoodCb(a="guest").pack())],
             _back(),
         ]
     )
