@@ -10,6 +10,8 @@ from app.core.exceptions import NotFoundError
 from app.core.utils.jalali import format_date_numeric
 from app.domain.notifications.models import NotificationType
 
+# The button under the notification. The food router handles exactly this string (imported from here);
+# notifications already in people's chats carry it too, so it must not change.
 OPEN_FOOD_MENU = "food:menu"
 
 

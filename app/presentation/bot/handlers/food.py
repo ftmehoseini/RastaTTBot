@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from app.application.presenters import food as texts
 from app.application.services import access
 from app.application.services.container import Services
+from app.application.use_cases.food_broadcast import OPEN_FOOD_MENU
 from app.core.exceptions import ExpiredActionError, NotFoundError
 from app.core.security.rbac import Permission
 from app.core.utils.jalali import format_date, format_date_short
@@ -65,6 +66,9 @@ async def open_menu_button(query: CallbackQuery, state: FSMContext, user: User) 
 # --- menu and own order -------------------------------------------------------------------------
 
 
+# «🍽 ثبت سفارش غذا» under the menu notification sends OPEN_FOOD_MENU (imported from the code that sends
+# it, so the two can't drift apart); it opens this week's menu with the days to order for.
+@router.callback_query(F.data == OPEN_FOOD_MENU)
 @router.callback_query(FoodCb.filter(F.a == "menu"))
 async def week_menu(query: CallbackQuery, services: Services) -> None:
     days = await services.food.week_menu()

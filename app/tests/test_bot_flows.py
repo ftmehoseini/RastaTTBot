@@ -682,3 +682,26 @@ async def test_reminder_buttons_open_check_in_and_check_out(bot: Harness, clock)
     await bot.press(EMP, "att:menu")
     assert "ورود و خروج" in bot.last_text(EMP) and AttCb(a="out").pack() in bot.buttons(EMP)
     assert not any("منقضی" in a for a in bot.alerts())
+
+
+async def test_order_button_under_the_menu_notification_opens_the_menu(bot: Harness, clock) -> None:
+    """Regression: «🍽 ثبت سفارش غذا» under «منوی غذای هفته … به‌روزرسانی شد» answered «منقضی شده»."""
+    from app.application.use_cases.food_broadcast import OPEN_FOOD_MENU, broadcast_menu
+
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    clock.set(tehran(2026, 10, 19, 8, 0))
+    async with bot.session_factory() as session:
+        services = bot.services(session)
+        secretary = await services.users.get_by_messenger_id(SEC)
+        parsed = parse_menu(menu_file(VALID_ROWS), services.time.today(), 100_000_000)
+        menu = (await services.food.import_menu(secretary, parsed, "menu.xlsx", None)).menu
+        await broadcast_menu(services, secretary.id, menu.id)
+    notice = next(t for t in bot.texts(EMP) if "منوی غذای هفته" in t)
+    assert "به‌روزرسانی" in notice or "سفارش" in notice
+    assert OPEN_FOOD_MENU in bot.buttons(EMP)  # the button really is under the notification
+    await bot.press(EMP, OPEN_FOOD_MENU)
+    assert not any("منقضی" in a for a in bot.alerts())
+    page = bot.last_text(EMP)
+    assert "برای سفارش، روز موردنظر را انتخاب کنید" in page
+    assert any(b.startswith("fd:day:") for b in bot.buttons(EMP))  # days to order for
