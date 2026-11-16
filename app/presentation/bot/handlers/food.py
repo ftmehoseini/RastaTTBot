@@ -243,20 +243,129 @@ async def cancel_day(query: CallbackQuery, callback_data: FoodCb, services: Serv
 # --- guest orders ---------------------------------------------------------------------------------
 
 
+GUEST_KEY = "food_guest_week"  # FSM data: {"days": [ordinals], "counts": {item hex: guests}}
+
+
+def _guest_markup(days, counts: dict[UUID, int]):
+    rows = []
+    for day in days:
+        for item in day.items:
+            n = counts.get(item.id, 0)
+            label = f"➕ {format_date_short(day.day)} · {item.food_name} · {format_number(item.price_toman)}"
+            if n:
+                label += f" · ×{to_persian_digits(n)}"
+            # Soroush shows at most two buttons in a row.
+            rows.append(
+                [
+                    button(label, FoodCb(a="gp", v=item.id.hex).pack()),
+                    button("➖", FoodCb(a="gm", v=item.id.hex).pack()),
+                ]
+            )
+    portions = sum(counts.values())
+    rows.append([button(f"✅ ثبت سفارش مهمان ({to_persian_digits(portions)} پرس)", FoodCb(a="g_wok").pack())])
+    rows.append([button("↩️ برگرداندن به سفارش‌های ثبت‌شده", FoodCb(a="g_wreset").pack())])
+    rows.append(_back())
+    return inline(rows)
+
+
+async def _guest_state(state: FSMContext, services: Services, user: User, fresh: bool = False):
+    """The days open for guests and the counts chosen so far (kept between taps until confirmed)."""
+    days = await services.food.upcoming_menu(guest=True)
+    stored = (await state.get_data()).get(GUEST_KEY)
+    ordinals = [d.day.toordinal() for d in days]
+    offered = {i.id for d in days for i in d.items}
+    if fresh or not stored or stored.get("days") != ordinals:
+        current = await services.food.current_guest_counts(user, [d.day for d in days])
+        counts = {k: v for k, v in current.items() if k in offered}
+    else:
+        counts = {UUID(hex=h): int(n) for h, n in stored["counts"].items()}
+    return days, counts
+
+
+async def _save_guest_state(state: FSMContext, days, counts: dict[UUID, int]) -> None:
+    await state.update_data(
+        {GUEST_KEY: {"days": [d.day.toordinal() for d in days], "counts": {k.hex: v for k, v in counts.items()}}}
+    )
+
+
+async def _show_guest(query: CallbackQuery, state: FSMContext, services: Services, user: User, fresh: bool) -> None:
+    days, counts = await _guest_state(state, services, user, fresh=fresh)
+    await _save_guest_state(state, days, counts)
+    markup = _guest_markup(days, counts) if days else inline([_back()])
+    await show(query, texts.guest_week(days, counts, services.policy.food), markup)
+
+
 @router.callback_query(FoodCb.filter(F.a == "guest"))
-async def guest_start(query: CallbackQuery, state: FSMContext, services: Services) -> None:
+async def guest_start(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
     await state.clear()
     if not services.policy.food.allow_guest_orders:
         await show(query, "ثبت سفارش مهمان فعلاً فعال نیست.", inline([_back()]))
         return
-    days = await services.food.upcoming_menu(guest=True)
-    if not days:
-        await show(query, "روزی برای سفارش مهمان باز نیست.", inline([_back()]))
-        return
-    rows = chunk(
-        [button(f"📅 {format_date_short(d.day)}", FoodCb(a="g_day", v=str(d.day.toordinal())).pack()) for d in days], 2
+    await _show_guest(query, state, services, user, fresh=True)
+
+
+@router.callback_query(FoodCb.filter(F.a == "g_wreset"))
+async def guest_reset(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    await _show_guest(query, state, services, user, fresh=True)
+
+
+@router.callback_query(FoodCb.filter(F.a.in_({"gp", "gm"})))
+async def guest_change(
+    query: CallbackQuery, callback_data: FoodCb, state: FSMContext, services: Services, user: User
+) -> None:
+    days, counts = await _guest_state(state, services, user)
+    item_id = UUID(hex=callback_data.v)
+    if not any(i.id == item_id for d in days for i in d.items):
+        raise ExpiredActionError("مهلت سفارش مهمان این روز تمام شده یا منو تغییر کرده است. دوباره باز کنید.")
+    n = counts.get(item_id, 0)
+    maximum = services.policy.food.max_guest_count_per_order
+    if callback_data.a == "gp":
+        if n >= maximum:
+            await query.answer(f"حداکثر {to_persian_digits(maximum)} نفر برای هر غذا", show_alert=True)
+            return
+        n += 1
+    else:
+        if n == 0:
+            await query.answer("برای این غذا مهمانی انتخاب نشده است.")
+            return
+        n -= 1
+    if n:
+        counts[item_id] = n
+    else:
+        counts.pop(item_id, None)
+    await _save_guest_state(state, days, counts)
+    await show(query, texts.guest_week(days, counts, services.policy.food), _guest_markup(days, counts))
+
+
+@router.callback_query(FoodCb.filter(F.a == "g_wok"))
+async def guest_week_confirm(query: CallbackQuery, state: FSMContext, services: Services, user: User) -> None:
+    stored = (await state.get_data()).get(GUEST_KEY)
+    if stored is None:
+        raise ExpiredActionError("این صفحه منقضی شده است. «👥 سفارش مهمان» را دوباره باز کنید.")
+    days = [date.fromordinal(int(o)) for o in stored["days"]]
+    wanted = {UUID(hex=h): int(n) for h, n in stored["counts"].items()}
+    # Dishes that had guests and are now 0 must be cancelled too: send them as 0.
+    orders = await services.food.repo.guest_orders_between(min(days), max(days), user.id) if days else []
+    current = {o.menu_item_id for o in orders if o.order_date in days}
+    counts = {item_id: wanted.get(item_id, 0) for item_id in {*current, *wanted}}
+    result = await services.food.save_guest_week(user, counts)
+    total = 0
+    if days:
+        orders = await services.food.repo.guest_orders_between(min(days), max(days), user.id)
+        total = sum(o.total_price for o in orders)
+    await state.update_data({GUEST_KEY: None})
+    markup = inline(
+        [
+            [button("🧾 صورت‌حساب من", FoodCb(a="invoice").pack())],
+            [button("👥 سفارش مهمان", FoodCb(a="guest").pack())],
+            _back(),
+        ]
     )
-    await show(query, "👥 سفارش مهمان\nتاریخ را انتخاب کنید:", inline([*rows, _back()]))
+    await show(query, texts.guest_week_saved(result, total, services.policy.food), markup)
+
+
+# The step-by-step guest screens below are no longer opened from the menu; they stay so buttons in
+# messages sent before this change still work.
 
 
 @router.callback_query(FoodCb.filter(F.a == "g_day"))

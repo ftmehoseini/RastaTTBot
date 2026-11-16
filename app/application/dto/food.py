@@ -52,6 +52,19 @@ class WeekOrderResult:
 
 
 @dataclass(frozen=True)
+class GuestWeekResult:
+    """What «ثبت سفارش مهمان» did, dish by dish."""
+
+    saved: list[tuple[date, str, int]] = field(default_factory=list)  # day, dish, guests
+    cancelled: list[tuple[date, str]] = field(default_factory=list)
+    skipped: list[tuple[date, str, str]] = field(default_factory=list)  # day, dish, Persian reason
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.saved or self.cancelled)
+
+
+@dataclass(frozen=True)
 class InvoiceLine:
     day: date
     food_name: str

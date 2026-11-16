@@ -11,6 +11,7 @@ from app.application.dto.food import (
     DayMenu,
     DaySummary,
     FoodReportRow,
+    GuestWeekResult,
     ImportResult,
     Invoice,
     InvoiceLine,
@@ -294,6 +295,81 @@ class FoodService:
         )
         await self.session.commit()
         return order
+
+    async def current_guest_counts(self, user: User, days: list[date]) -> dict[UUID, int]:
+        """Guests per menu dish the person has ordered on these days (active orders only)."""
+        if not days:
+            return {}
+        orders = await self.repo.guest_orders_between(min(days), max(days), user.id)
+        return {o.menu_item_id: o.guest_count for o in orders}
+
+    async def save_guest_week(self, user: User, counts: dict[UUID, int]) -> GuestWeekResult:
+        """Make each dish's guest count exactly the given number (0 = cancel), in one transaction.
+
+        Dishes whose day has closed, or with a count over the limit, are skipped and reported.
+        """
+        access.require(user, Permission.FOOD_ORDER)
+        if not self.policy.allow_guest_orders:
+            raise ValidationError("ثبت سفارش مهمان فعلاً امکان‌پذیر نیست.")
+        result = GuestWeekResult()
+        items = {}
+        for item_id in counts:
+            item = await self.repo.get_item(item_id)
+            if item is not None:
+                items[item_id] = item
+        for item in sorted(items.values(), key=lambda i: (i.menu_date, i.food_name)):
+            item_id, count = item.id, counts[item.id]
+            day = item.menu_date
+            order = await self.repo.get_guest_order(user.id, day, item.id, for_update=True)
+            current = order.guest_count if order is not None and order.status == OrderStatus.ACTIVE else 0
+            if count == current:
+                continue
+            if not self.is_open(day, guest=True):
+                reason = f"مهلت تا ساعت {format_time(self.deadline(day, guest=True))} بود"
+                result.skipped.append((day, item.food_name, reason))
+                continue
+            if count < 0 or count > self.policy.max_guest_count_per_order:
+                result.skipped.append((day, item.food_name, f"حداکثر {self.policy.max_guest_count_per_order} نفر"))
+                continue
+            if count == 0:
+                assert order is not None
+                order.status = OrderStatus.CANCELLED
+                order.updated_by = user.id
+                self.audit.record(AuditAction.FOOD_GUEST_ORDER_CANCELLED, "food_guest_order", order.id, user.id, {})
+                result.cancelled.append((day, item.food_name))
+                continue
+            item = await self._orderable_item(item_id)
+            if order is None:
+                order = FoodGuestOrder(
+                    user_id=user.id,
+                    order_date=day,
+                    menu_item_id=item.id,
+                    food_name=item.food_name,
+                    unit_price_toman=item.price_toman,
+                    guest_count=count,
+                    status=OrderStatus.ACTIVE,
+                    created_by=user.id,
+                )
+                try:
+                    async with self.session.begin_nested():
+                        self.session.add(order)
+                except IntegrityError:
+                    raise ConflictError("سفارش مهمان همزمان ثبت شد. لطفاً دوباره امتحان کنید.") from None
+            else:
+                order.guest_count = count
+                order.status = OrderStatus.ACTIVE
+                order.updated_by = user.id
+            await self.session.flush()
+            self.audit.record(
+                AuditAction.FOOD_GUEST_ORDER_PLACED,
+                "food_guest_order",
+                order.id,
+                user.id,
+                {"date": day.isoformat(), "item": item.food_name, "count": count, "via": "week"},
+            )
+            result.saved.append((day, item.food_name, count))
+        await self.session.commit()
+        return result
 
     async def cancel_guest_order(self, user: User, guest_order_id: UUID) -> FoodGuestOrder:
         access.require(user, Permission.FOOD_ORDER)

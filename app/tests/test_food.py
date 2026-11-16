@@ -224,3 +224,25 @@ async def test_save_week_follows_the_food_settings(services, make_user, menu, cl
     services.policy.food.allow_order_edit_before_deadline = False
     blocked = await services.food.save_week(user, {date(2026, 10, 19): [items["قرمه‌سبزی"].id]})
     assert not blocked.changed and "مجاز نیست" in blocked.skipped[0][1]
+
+
+async def test_save_guest_week_sets_counts_cancels_and_reports(services, make_user, menu, clock, policy) -> None:
+    user = await make_user()
+    items = _items(menu)
+    joojeh, gheimeh = items["جوجه کباب"].id, items["قیمه"].id
+    clock.set(tehran(2026, 10, 19, 9, 0))
+    result = await services.food.save_guest_week(user, {joojeh: 3, gheimeh: 2})
+    assert [(n, c) for _, n, c in result.saved] == [("جوجه کباب", 3), ("قیمه", 2)]
+    days = [date(2026, 10, 19), date(2026, 10, 20)]
+    assert await services.food.current_guest_counts(user, days) == {joojeh: 3, gheimeh: 2}
+
+    over = policy.food.max_guest_count_per_order + 1
+    result = await services.food.save_guest_week(user, {joojeh: 3, gheimeh: 0})
+    assert result.cancelled == [(date(2026, 10, 20), "قیمه")] and not result.saved
+    result = await services.food.save_guest_week(user, {joojeh: over})
+    assert not result.changed and "حداکثر" in result.skipped[0][2]
+
+    clock.set(tehran(2026, 10, 19, 10, 30))  # Monday closed, Tuesday still open
+    result = await services.food.save_guest_week(user, {joojeh: 1, gheimeh: 4})
+    assert result.skipped[0][:2] == (date(2026, 10, 19), "جوجه کباب") and result.saved[0][1:] == ("قیمه", 4)
+    assert await services.food.current_guest_counts(user, days) == {joojeh: 3, gheimeh: 4}

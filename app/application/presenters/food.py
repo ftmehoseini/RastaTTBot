@@ -3,7 +3,14 @@
 from datetime import date
 from uuid import UUID
 
-from app.application.dto.food import DayMenu, DaySummary, Invoice, MenuImportPreview, WeekOrderResult
+from app.application.dto.food import (
+    DayMenu,
+    DaySummary,
+    GuestWeekResult,
+    Invoice,
+    MenuImportPreview,
+    WeekOrderResult,
+)
 from app.core.config.policy import FoodPolicy, PaymentPolicy
 from app.core.utils.jalali import format_date, format_date_numeric, format_date_short, format_time
 from app.core.utils.text import format_money, to_persian_digits
@@ -56,6 +63,38 @@ def week_saved(result: WeekOrderResult, total: int, policy: FoodPolicy) -> str:
     for day, reason in result.skipped:
         lines.append(f"⚠️ {format_date_short(day)}: تغییر نکرد ({reason})")
     lines.append(f"\n💰 جمع سفارش‌های شما در این روزها: {format_money(total, policy.currency_label)}")
+    return "\n".join(lines)
+
+
+def guest_week(days: list[DayMenu], counts: dict[UUID, int], policy: FoodPolicy) -> str:
+    """Instructions, the guest deadline and the running total; the dishes are the buttons below."""
+    if not days:
+        return "👥 روزی برای سفارش مهمان باز نیست."
+    lines = [
+        "👥 سفارش مهمان",
+        "برای هر غذا با ➕ یک پرس اضافه و با ➖ یک پرس کم کنید؛ در پایان «ثبت سفارش مهمان» را بزنید.",
+        f"(حداکثر {to_persian_digits(policy.max_guest_count_per_order)} نفر برای هر غذا در هر روز؛ "
+        "صفر کردن تعداد، سفارش مهمان آن غذا را لغو می‌کند)",
+        f"⏰ مهلت سفارش مهمان هر روز: تا ساعت {to_persian_digits(policy.guest_deadline.strftime('%H:%M'))} همان روز",
+    ]
+    prices = {item.id: item.price_toman for day in days for item in day.items}
+    portions = sum(n for item_id, n in counts.items() if item_id in prices)
+    total = sum(prices[item_id] * n for item_id, n in counts.items() if item_id in prices)
+    lines += ["", f"🧾 مهمان‌ها: {to_persian_digits(portions)} پرس — جمع {format_money(total, policy.currency_label)}"]
+    return "\n".join(lines)
+
+
+def guest_week_saved(result: GuestWeekResult, total: int, policy: FoodPolicy) -> str:
+    if not result.changed and not result.skipped:
+        return "ℹ️ تغییری نداده بودید؛ سفارش‌های مهمان همان قبلی است."
+    lines = ["✅ سفارش مهمان ثبت شد." if result.changed else "⚠️ سفارش مهمانی ثبت نشد."]
+    for day, name, count in result.saved:
+        lines.append(f"👥 {format_date_short(day)}: {name} × {to_persian_digits(count)}")
+    for day, name in result.cancelled:
+        lines.append(f"🗑 {format_date_short(day)}: {name} لغو شد")
+    for day, name, reason in result.skipped:
+        lines.append(f"⚠️ {format_date_short(day)}: {name} تغییر نکرد ({reason})")
+    lines.append(f"\n💰 جمع سفارش‌های مهمان در این روزها: {format_money(total, policy.currency_label)}")
     return "\n".join(lines)
 
 

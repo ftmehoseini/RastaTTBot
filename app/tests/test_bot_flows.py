@@ -429,10 +429,11 @@ async def test_food_order_and_admin_reports(bot: Harness, clock) -> None:
     await bot.press(EMP, FoodCb(a="item", v=item_id.hex).pack())
     await bot.press(EMP, FoodCb(a="ok", v=item_id.hex).pack())
     assert "ثبت شد" in bot.last_text(EMP)
-    await bot.press(EMP, FoodCb(a="g_item", v=item_id.hex).pack())
-    await bot.text(EMP, "۲")
+    await bot.press(EMP, FoodCb(a="guest").pack())
     assert "سفارش مهمان" in bot.last_text(EMP)
-    await bot.press(EMP, FoodCb(a="g_ok", v=f"{item_id.hex}.2").pack())
+    await bot.press(EMP, FoodCb(a="gp", v=item_id.hex).pack())
+    await bot.press(EMP, FoodCb(a="gp", v=item_id.hex).pack())
+    await bot.press(EMP, FoodCb(a="g_wok").pack())
     await bot.press(EMP, FoodCb(a="invoice").pack())
     assert "۶۳۰٬۰۰۰" in bot.last_text(EMP)  # 1 + 2 guests × 210,000
 
@@ -799,3 +800,71 @@ async def test_order_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
     assert "صورت‌حساب غذای این هفته" in bot.last_text(EMP) and "۲۱۰٬۰۰۰" in bot.last_text(EMP)
     await bot.press(EMP, FoodCb(a="week").pack())
     assert "صورت‌حساب" in bot.last_text(EMP) and not any("منقضی" in a for a in bot.alerts())
+
+
+async def test_guest_orders_for_the_whole_week_on_one_screen(bot: Harness, clock) -> None:
+    """➕/➖ per dish, nothing saved until confirmed, 0 cancels, the limit of 10, closed days reported."""
+    from sqlalchemy import select
+
+    from app.domain.food.models import FoodGuestOrder, OrderStatus
+
+    await bot.register(EMP, "مریم کریمی")
+    await bot.register(SEC, "سارا منشی", RoleCode.ADMIN_1_SECRETARY)
+    clock.set(tehran(2026, 10, 19, 8, 0))
+    async with bot.session_factory() as session:
+        services = bot.services(session)
+        secretary = await services.users.get_by_messenger_id(SEC)
+        parsed = parse_menu(menu_file(VALID_ROWS), date(2026, 10, 19), 100_000_000)
+        menu = (await services.food.import_menu(secretary, parsed, "menu.xlsx", None)).menu
+        items = {i.food_name: i.id for i in menu.items}
+    joojeh, gheimeh = items["جوجه کباب"], items["قیمه"]
+
+    async def guests() -> dict[str, int]:
+        async with bot.session_factory() as session:
+            rows = (await session.execute(select(FoodGuestOrder))).scalars().all()
+            return {o.food_name: o.guest_count for o in rows if o.status == OrderStatus.ACTIVE}
+
+    await bot.text(EMP, "🍽 سفارش غذا")
+    await bot.press(EMP, FoodCb(a="guest").pack())
+    assert "مهلت سفارش مهمان هر روز: تا ساعت ۱۰:۰۰" in bot.last_text(EMP)
+    labels = button_labels(bot, EMP)
+    assert any("دوشنبه ۲۷/۷ · جوجه کباب · ۲۱۰٬۰۰۰" in b for b in labels)
+    assert any("سه‌شنبه ۲۸/۷ · قیمه · ۱۷۵٬۰۰۰" in b for b in labels)
+    rows = next(
+        c.reply_markup.inline_keyboard
+        for c in reversed(bot.recorder.calls)
+        if getattr(getattr(c, "reply_markup", None), "inline_keyboard", None) and int(c.chat_id) == EMP
+    )
+    assert all(len(row) <= 2 for row in rows)  # Soroush: two buttons per row
+
+    for _ in range(3):
+        await bot.press(EMP, FoodCb(a="gp", v=joojeh.hex).pack())
+    await bot.press(EMP, FoodCb(a="gm", v=joojeh.hex).pack())
+    await bot.press(EMP, FoodCb(a="gp", v=gheimeh.hex).pack())
+    assert any("جوجه کباب" in b and "×۲" in b for b in button_labels(bot, EMP))
+    assert "۳ پرس — جمع ۵۹۵٬۰۰۰" in bot.last_text(EMP)  # 2 × 210,000 + 175,000
+    assert await guests() == {}  # nothing saved before confirming
+    await bot.press(EMP, FoodCb(a="g_wok").pack())
+    assert "سفارش مهمان ثبت شد" in bot.last_text(EMP) and "۵۹۵٬۰۰۰" in bot.last_text(EMP)
+    assert await guests() == {"جوجه کباب": 2, "قیمه": 1}
+
+    # Reopening shows the saved counts; ➖ to 0 cancels on confirm; the limit is 10.
+    await bot.press(EMP, FoodCb(a="guest").pack())
+    assert any("جوجه کباب" in b and "×۲" in b for b in button_labels(bot, EMP))
+    await bot.press(EMP, FoodCb(a="gm", v=gheimeh.hex).pack())
+    for _ in range(9):
+        await bot.press(EMP, FoodCb(a="gp", v=joojeh.hex).pack())
+    assert any("حداکثر ۱۰ نفر" in a for a in bot.alerts())
+    await bot.press(EMP, FoodCb(a="g_wok").pack())
+    assert "قیمه لغو شد" in bot.last_text(EMP)
+    assert await guests() == {"جوجه کباب": 10}
+
+    # A day that closes while the screen is open is reported, the rest is saved.
+    await bot.press(EMP, FoodCb(a="guest").pack())
+    await bot.press(EMP, FoodCb(a="gm", v=joojeh.hex).pack())
+    await bot.press(EMP, FoodCb(a="gp", v=gheimeh.hex).pack())
+    clock.set(tehran(2026, 10, 19, 10, 30))
+    await bot.press(EMP, FoodCb(a="g_wok").pack())
+    saved = bot.last_text(EMP)
+    assert "جوجه کباب تغییر نکرد (مهلت تا ساعت ۱۰:۰۰ بود)" in saved and "قیمه × ۱" in saved
+    assert await guests() == {"جوجه کباب": 10, "قیمه": 1}

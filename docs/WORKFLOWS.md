@@ -46,7 +46,7 @@ Employee sub-menu: منو و سفارش هفته · سفارش امروز · س�
 
 **Today («🍛 سفارش امروز»).** Today's dishes → choose → confirm, as before. After `ordering_deadline_time` on the day itself, ordering, changing and cancelling are refused.
 
-**Guest order.** Day → dish → guest count (buttons 1–10 or type a number, ≤ `max_guest_count_per_order`) → review with total → confirm. Ordering the same dish again for the same day replaces the count. Guest meals are stored, reported and billed separately from the employee's own meal.
+**Guest order («👥 سفارش مهمان»).** One screen with every day still open for guests and its dishes with prices: «➕ day · dish · price · ×N» adds one guest portion, «➖» next to it removes one (two buttons per row for Soroush). The message shows the guest deadline and the running total; nothing is saved until «✅ ثبت سفارش مهمان (N پرس)». Each dish/day is then set to exactly that count; a count brought back to 0 cancels that guest order; at most `max_guest_count_per_order` (10) per dish per day; days that closed meanwhile are reported as not changed. «↩️ برگرداندن به سفارش‌های ثبت‌شده» discards unsaved changes. Guest meals are stored, reported and billed separately from the employee's own meal. (The old step-by-step guest buttons in earlier messages still work.)
 
 **Bill («🧾 صورت‌حساب من»).** This week's lines (own and guest), totals, and the payment details from `payment.*`, with «🗑 لغو مهمان» for guest orders still open and «🧾 صورت‌حساب هفته‌ی بعد» when there are orders next week. (The former «📊 گزارش غذای این هفته» showed the same; its buttons in old messages open the bill.)
 
